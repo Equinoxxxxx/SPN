@@ -1,0 +1,3 @@
+[submodule "simple-HRNet"]
+	path = simple-HRNet
+	url = git@github.com:Equinoxxxxx/simple-HRNet.git
