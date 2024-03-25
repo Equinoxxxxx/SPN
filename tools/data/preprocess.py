@@ -8,6 +8,7 @@ from ..utils import makedir
 from .crop_images import crop_img_ctx_bdd100k, crop_ctx_PIE_JAAD, crop_img_PIE_JAAD, crop_img_TITAN, crop_ctx_TITAN, crop_img_ctx_nusc
 from .get_skeletons import get_skeletons
 from .get_segmentation import segment_dataset
+from .get_obj_tracks import track
 from config import dataset_root, datasets
 from ..datasets.nuscenes_dataset import save_scene_token_dict, save_instance_token_dict, save_sample_token_dict, save_ins_tokens, save_anns_in_sensor
 
@@ -66,8 +67,10 @@ def prepare_data(datasets):
     if 'bdd100k' in datasets:
         bdd100k_get_vidnm2vidid()
         crop_img_ctx_bdd100k()
+    
     get_skeletons(datasets=datasets)
     segment_dataset(datasets=datasets)
+    track(dataset_names=datasets)
 
 
 if __name__ == '__main__':
@@ -107,4 +110,3 @@ if __name__ == '__main__':
     #             oids_all = oids_all.union(cls2oid[cls])
     #             num_obj += len(cls2oid[cls])
     # print(len(oids_all), num_obj)
-    prepare_data()

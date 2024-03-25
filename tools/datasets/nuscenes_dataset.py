@@ -5,6 +5,7 @@ from ..data.coord_transform import nusc_3dbbox_to_2dbbox
 from ..visualize import draw_box, draw_boxes_on_img
 from ..utils import makedir
 from ..data.normalize import img_mean_std, norm_imgs
+from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
 from .dataset_id import DATASET2ID
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
 from config import dataset_root
@@ -23,7 +24,8 @@ import pdb
 
 NUSC_ROOT = os.path.join(dataset_root, 'nusc')
 
-
+# img id (unique)
+# obj id (unique)
 class NuscDataset(torch.utils.data.Dataset):
     def __init__(self,
                  data_root=NUSC_ROOT,
@@ -43,13 +45,14 @@ class NuscDataset(torch.utils.data.Dataset):
                  ctx_size=(224, 224),
                  color_order='BGR', 
                  img_norm_mode='torch',
-                 modalities=['img', 'sklt', 'ctx', 'traj', 'ego'],
+                 modalities=['img', 'sklt', 'ctx', 'traj', 'ego', 'social'],
                  img_format='',
                  sklt_format='coord',
                  ctx_format='ped_graph',
                  traj_format='ltrb',
                  ego_format='accel',
                  seg_cls=['person', 'vehicle', 'road', 'traffic_light'],
+                 max_n_neighbor=10,
                  ):
         super().__init__()
         self.data_root = data_root
@@ -83,6 +86,7 @@ class NuscDataset(torch.utils.data.Dataset):
         self.traj_format = traj_format
         self.ego_format = ego_format
         self.seg_cls = seg_cls
+        self.max_n_neighbor = max_n_neighbor
         # self.ego_motion_key = 'ego_accel' if 'accel' in self.ego_format else 'ego_speed'
         if self.subset == 'train':
             self.sce_names = TRAIN_SC
@@ -105,12 +109,12 @@ class NuscDataset(torch.utils.data.Dataset):
         self.nusc = NuScenes(version='v1.0-trainval', 
                              dataroot=NUSC_ROOT, 
                              verbose=True)
-        # self.imgnm_to_objid_path = os.path.join(self.extra_root, 
-        #                                         self.subset+'_imgnm_to_objid_to_ann.pkl')
+        self.imgnm_to_objid_path = os.path.join(self.extra_root, 
+                                                self.subset+'_imgnm_to_objid_to_ann.pkl')
 
         # get vehicle tracks and pedestrian tracks
         self.p_tracks = self.get_obj_tracks(obj_type='ped')
-        # self.v_tracks = self.get_obj_tracks(obj_type='veh')
+        self.v_tracks = self.get_obj_tracks(obj_type='veh')
 
 
         # add the acceleration to the pedestrian tracks
@@ -119,14 +123,14 @@ class NuscDataset(torch.utils.data.Dataset):
 
 
         # get cid to img name to obj id dict
-        # if not os.path.exists(self.imgnm_to_objid_path):
-        #     self.imgnm_to_objid = \
-        #         self.get_imgnm_to_objid(self.p_tracks, 
-        #                                 self.v_tracks, 
-        #                                 self.imgnm_to_objid_path)
-        # else:
-        #     with open(self.imgnm_to_objid_path, 'rb') as f:
-        #         self.imgnm_to_objid = pickle.load(f)
+        if not os.path.exists(self.imgnm_to_objid_path):
+            self.imgnm_to_objid = \
+                self.get_imgnm_to_objid(self.p_tracks, 
+                                        self.v_tracks, 
+                                        self.imgnm_to_objid_path)
+        else:
+            with open(self.imgnm_to_objid_path, 'rb') as f:
+                self.imgnm_to_objid = pickle.load(f)
         
         # convert tracks into samples
         self.samples = self.tracks_to_samples(self.p_tracks)
@@ -134,6 +138,13 @@ class NuscDataset(torch.utils.data.Dataset):
         # get num samples
         self.num_samples = len(self.samples['obs']['sam_id'])
 
+        # get neighbors
+        if 'social' in self.modalities:
+            self.neighbor_seq_path = os.path.join(self.extra_root,
+                f'fps_{self.fps}_obs_{self.obs_len}_pred_{self.pred_len}_interval_{self.seq_interval}_overlap_{self.overlap_ratio}.pkl')
+            self.samples = self.get_neighbor_relation(self.samples,
+                                                self.neighbor_seq_path)
+                                                
         # apply interval
         if self.seq_interval > 0:
             self.downsample_seq()
@@ -190,7 +201,19 @@ class NuscDataset(torch.utils.data.Dataset):
                   'img_ijhw': torch.tensor([-1, -1, -1, -1]),
                   'ctx_ijhw': torch.tensor([-1, -1, -1, -1]),
                   'sklt_ijhw': torch.tensor([-1, -1, -1, -1]),
+                  'obs_neighbor_relation': torch.zeros((1, self.obs_len, 5)),
+                  'obs_neighbor_bbox': torch.zeros((1, self.obs_len, 4)),
+                  'obs_neighbor_oid': torch.zeros((1,)),
                   }
+        if 'social' in self.modalities:
+            relations, neighbor_bbox, neighbor_oid =\
+                  pad_neighbor([self.samples['obs']['neighbor_relations'][idx],
+                                self.samples['obs']['neighbor_bbox_2d'][idx],
+                                self.samples['obs']['neighbor_oid'][idx]],
+                                self.max_n_neighbor)
+            sample['obs_neighbor_relation'] = torch.tensor(relations).float()
+            sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
+            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid)
         if 'img' in self.modalities:
             imgs = []
             for sam_id in self.samples['obs']['sam_id'][idx]:
@@ -590,6 +613,7 @@ class NuscDataset(torch.utils.data.Dataset):
         return np.sqrt(ego_vel[0]**2 + ego_vel[1]**2) 
 
     def get_imgnm_to_objid(self, p_tracks, v_tracks, save_path):
+        # 
         imgnm_to_oid_to_info = {}
         # pedestrian
         tracks = p_tracks
@@ -634,6 +658,92 @@ class NuscDataset(torch.utils.data.Dataset):
         with open(save_path, 'wb') as f:
             pickle.dump(imgnm_to_oid_to_info, f)
         return imgnm_to_oid_to_info
+
+    def get_neighbor_relation(self,
+                      samples,
+                      save_path,
+                      padding_val=0):
+        if os.path.exists(save_path):
+            with open(save_path, 'rb') as f:
+                neighbor_seq = pickle.load(f)
+        else:
+            n_sample = len(samples['obs']['bbox_2d'])
+            relations = []
+            neighbor_bbox = []
+            neighbor_oid = []
+            neighbor_cls = []
+            print('Getting neighbor sequences')
+            for i in tqdm(range(n_sample)):
+                target_oid = samples['obs']['ins_id'][i][0]  # str
+                target_bbox_seq = np.array(samples['obs']['bbox_2d'][i])  # T, 4
+                obslen = len(target_bbox_seq)
+                bbox_seq_dict = {'ped':{},
+                                'veh':{}}
+                for j in range(obslen):
+                    imgnm = str(samples['obs']['sam_id'][i][j])  # str
+                    cur_ped_ids = set(self.imgnm_to_objid[imgnm]['ped'].keys())
+                    cur_ped_ids.remove(target_oid)
+                    cur_veh_ids = set(self.imgnm_to_objid[imgnm]['veh'].keys())
+                    # ped neighbor for cur sample
+                    # existing neighbor
+                    for oid in set(bbox_seq_dict.keys())&cur_ped_ids:
+                        bbox = np.array(self.imgnm_to_objid[imgnm]['ped'][oid]['bbox_2d'])
+                        bbox_seq_dict['ped'][oid].append(bbox)
+                    # first appearing neighbor
+                    for oid in cur_ped_ids-set(bbox_seq_dict.keys()):
+                        bbox = np.array(self.imgnm_to_objid[imgnm]['ped'][oid]['bbox_2d'])
+                        bbox_seq_dict['ped'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
+                    # disappeared neighbor
+                    for oid in set(bbox_seq_dict.keys())-cur_ped_ids:
+                        bbox_seq_dict['ped'][oid].append(np.ones([4])*padding_val)
+                    # veh neighbor for cur sample
+                    # existing neighbor
+                    for oid in set(bbox_seq_dict.keys())&cur_veh_ids:
+                        bbox = np.array(self.imgnm_to_objid[imgnm]['veh'][oid]['bbox_2d'])
+                        bbox_seq_dict['veh'][oid].append(bbox)
+                    # first appearing neighbor
+                    for oid in cur_veh_ids-set(bbox_seq_dict.keys()):
+                        bbox = np.array(self.imgnm_to_objid[imgnm]['veh'][oid]['bbox_2d'])
+                        bbox_seq_dict['veh'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
+                    # disappeared neighbor
+                    for oid in set(bbox_seq_dict.keys())-cur_veh_ids:
+                        bbox_seq_dict['veh'][oid].append(np.ones([4])*padding_val)
+                cur_neighbor_bbox = []
+                cur_neighbor_oid = []
+                cur_neighbor_cls = []
+                for oid in bbox_seq_dict['ped']:
+                    cur_neighbor_bbox.append(bbox_seq_dict['ped'][oid])  # T, 4
+                    cur_neighbor_oid.append(int(oid))
+                    cur_neighbor_cls.append(0)
+                for oid in bbox_seq_dict['veh']:
+                    cur_neighbor_bbox.append(bbox_seq_dict['veh'][oid])  # T, 4
+                    cur_neighbor_oid.append(int(oid))
+                    cur_neighbor_cls.append(1)
+                cur_neighbor_bbox = np.array(cur_neighbor_bbox)  # K T 4
+                cur_neighbor_oid = np.array(cur_neighbor_oid)  # K,
+                cur_neighbor_cls = np.array(cur_neighbor_cls)  # K,
+                cur_relations = bbox2d_relation_multi_seq(target_bbox_seq,
+                                                        cur_neighbor_bbox,
+                                                        rela_func='log_bbox_reg')  # K T 4
+                # concat cls label to relations
+                cur_relations = np.concatenate([cur_relations, 
+                                                np.reshape(cur_neighbor_cls, [-1,1,1])],
+                                                -1)
+                relations.append(cur_relations)  # K T 5
+                neighbor_bbox.append(cur_neighbor_bbox)  # K T 4
+                neighbor_oid.append(cur_neighbor_oid)  # K
+                neighbor_cls.append(cur_neighbor_cls)  # K
+            neighbor_seq = {}
+            neighbor_seq['neighbor_relations'] = relations
+            neighbor_seq['neighbor_bbox_2d'] = neighbor_bbox
+            neighbor_seq['neighbor_oid'] = neighbor_oid
+            neighbor_seq['neighbor_cls'] = neighbor_cls
+            with open(save_path, 'wb') as f:
+                pickle.dump(neighbor_seq, f)
+        # add neighbor info to samples
+        for k in neighbor_seq:
+            samples['obs'][k] = neighbor_seq[k]
+        return samples
 
     def tracks_to_samples(self, tracks):
         seq_len = self._obs_len + self._pred_len
@@ -723,9 +833,6 @@ class NuscDataset(torch.utils.data.Dataset):
                 new_k = np.array(new_k)
                 self.samples['pred'][k] = new_k
     
-    def get_neighbors(self, samids):
-        
-        pass
 
 
 def save_scene_token_dict():

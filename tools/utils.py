@@ -779,3 +779,10 @@ def draw_curves(path, train_curve, test_curve, metric_type='loss', test_every=1)
 def write_info_txt(content_list, dir):
     with open(dir, 'w') as f:
         f.writelines(content_list)
+
+
+def get_random_idx(n, k):
+    idx = list(range(n))
+    random.shuffle(idx)
+    idx = idx[:k]
+    return idx

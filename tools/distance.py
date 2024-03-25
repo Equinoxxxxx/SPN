@@ -28,3 +28,10 @@ def cartesian_similarity(feats1:torch.Tensor,
 
     if mode == 'simi':
         simi_matis = torch.sum(tensor1 * tensor2, dim=-1, keepdim=False)  # b*b, k2, k1
+
+
+def bbox_simi_seq(bbox_seq, neighbor_seqs):
+    '''
+    bbox_seq: ndarray T, 4 (ltrb)
+    neighbor_seqs: ndarray K, T, 4
+    '''

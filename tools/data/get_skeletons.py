@@ -7,8 +7,8 @@ from tqdm import tqdm
 from ..utils import makedir
 from config import dataset_root, cktp_root
 
-from simple_HRNet.misc.visualization import draw_points_and_skeleton, joints_dict
-from simple_HRNet.SimpleHRNet import SimpleHRNet
+from simple-HRNet.misc.visualization import draw_points_and_skeleton, joints_dict
+from simple-HRNet.SimpleHRNet import SimpleHRNet
 
 
 # skeletons

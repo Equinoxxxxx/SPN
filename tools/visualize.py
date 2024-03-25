@@ -17,6 +17,3 @@ def draw_boxes_on_img(img, traj_seq):
         img = cv2.rectangle(img=img, pt1=(int(traj_seq[i, 0]), int(traj_seq[i, 1])), pt2=(int(traj_seq[i, 2]), int(traj_seq[i, 3])), color=(255 * r, 0, 0), thickness=2)
 
     return img
-
-def visualize_input_traj():
-    pass

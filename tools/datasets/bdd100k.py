@@ -14,6 +14,7 @@ from torchvision.transforms import functional as TVF
 from ..data.preprocess import bdd100k_get_vidnm2vidid
 from ..data.normalize import img_mean_std, norm_imgs
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
+from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
 from .dataset_id import DATASET2ID, ID2DATASET
 
 from config import dataset_root
@@ -46,6 +47,8 @@ RM_VID_NMS = ['036aea46-ee63a8e7',
               'b1f4491b-bf7d513f',
               'b1f4491b-09593e90']
 
+# obj id (unique)
+# vid id --> img id
 class BDD100kDataset(torch.utils.data.Dataset):
     def __init__(self,
                  subsets='train_val',
@@ -58,7 +61,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                  min_h=72,
                  min_w=36,
                  resize_mode='even_padded', crop_size=(224, 224),
-                 modalities=['img', 'sklt', 'ctx', 'traj', 'ego'],
+                 modalities=['img', 'sklt', 'ctx', 'traj', 'ego', 'social'],
                  img_format='',
                  ctx_format='ped_graph', ctx_size=(224, 224),
                  sklt_format='pseudo_heatmap',
@@ -69,6 +72,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                  rm_occl=False,
                  rm_trun=False,
                  tte=None,
+                 max_n_neighbor=10,
                  ):
         super().__init__()
         self.dataset_name = 'bdd100k'
@@ -105,6 +109,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
         self.rm_occl = rm_occl
         self.rm_trun = rm_trun
         self.tte = tte
+        self.max_n_neighbor = max_n_neighbor
 
         self.transforms = {'random': 0,
                             'balance': 0,
@@ -115,6 +120,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
         self.subsets = self.subsets.split('_')
         self.extra_root = os.path.join(self.data_root, 
                                        'extra')
+        # get dict
         vid_nm2id_path = os.path.join(self.extra_root, 
                                       'vid_nm2id.pkl')
         vid_id2nm_path = os.path.join(self.extra_root, 
@@ -126,20 +132,40 @@ class BDD100kDataset(torch.utils.data.Dataset):
             with open(vid_nm2id_path, 'rb') as f:
                 self.vid_nm2id = pickle.load(f)
         else:
+            # id: int  nm: str
             self.vid_id2nm, self.vid_nm2id = \
                 bdd100k_get_vidnm2vidid(data_root=self.data_root,
                                         sub_set=self.subsets)
+        self.imgnm_to_objid_path = os.path.join(self.extra_root, 
+                                                'imgnm_to_objid_to_ann.pkl')
+        
         # get tracks
         self.p_tracks, self.v_tracks = self.get_tracks()
         # add the acceleration to the pedestrian tracks
         self.p_tracks = self._get_accel(self.p_tracks)
         self.v_tracks = self._get_accel(self.v_tracks)
 
+        # get neighbor info
+        if os.path.exists(self.imgnm_to_objid_path):
+            with open(self.imgnm_to_objid_path, 'rb') as f:
+                self.imgnm_to_objid = pickle.load(f)
+        else:
+            self.imgnm_to_objid = \
+                self.get_imgnm_to_objid(self.p_tracks, 
+                                        self.v_tracks, 
+                                        self.imgnm_to_objid_path)
         # convert tracks into samples
         self.samples = self.tracks_to_samples(self.p_tracks)
 
         # get num samples
         self.num_samples = len(self.samples['obs']['img_id'])
+
+        # get neighbors
+        if 'social' in self.modalities:
+            self.neighbor_seq_path = os.path.join(self.extra_root,
+                f'fps_{self.fps}_obs_{self.obs_len}_pred_{self.pred_len}_interval_{self.seq_interval}_overlap_{self.overlap_ratio}.pkl')
+            self.samples = self.get_neighbor_relation(self.samples,
+                                                self.neighbor_seq_path)
 
         # apply interval
         if self.seq_interval > 0:
@@ -194,7 +220,19 @@ class BDD100kDataset(torch.utils.data.Dataset):
                   'img_ijhw': torch.tensor([-1, -1, -1, -1]),
                   'ctx_ijhw': torch.tensor([-1, -1, -1, -1]),
                   'sklt_ijhw': torch.tensor([-1, -1, -1, -1]),
+                  'obs_neighbor_relation': torch.zeros((1, self.obs_len, 5)),
+                  'obs_neighbor_bbox': torch.zeros((1, self.obs_len, 4)),
+                  'obs_neighbor_oid': torch.zeros((1,)),
                   }
+        if 'social' in self.modalities:
+            relations, neighbor_bbox, neighbor_oid =\
+                  pad_neighbor([self.samples['obs']['neighbor_relations'][idx],
+                                self.samples['obs']['neighbor_bbox'][idx],
+                                self.samples['obs']['neighbor_oid'][idx]],
+                                self.max_n_neighbor)
+            sample['obs_neighbor_relation'] = torch.tensor(relations).float()
+            sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
+            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid)
         if 'img' in self.modalities:
             imgs = []
             for img_id in self.samples['obs']['img_id_int'][idx]:
@@ -505,10 +543,10 @@ class BDD100kDataset(torch.utils.data.Dataset):
                                 track_dict[cls][oid]['img_id_int'][-1].append(img_id_int)
                                 track_dict[cls][oid]['bbox'][-1].append(ltrb)
                                 track_dict[cls][oid]['ego_speed'][-1].append(spd)
-        p_tracks = {'vid_id':[],
-                    'obj_id':[],
-                    'img_id':[],
-                    'img_id_int':[],
+        p_tracks = {'vid_id':[],  # int
+                    'obj_id':[],  # str
+                    'img_id':[],  # str
+                    'img_id_int':[],  # int
                     'bbox':[],
                     'ego_speed':[],
                     }
@@ -529,6 +567,8 @@ class BDD100kDataset(torch.utils.data.Dataset):
                 for k in track_dict['veh'][oid]:
                     v_tracks[k].append(track_dict['veh'][oid][k][i])
                 v_tracks['obj_id'].append([oid for _ in track_dict['veh'][oid]['img_id_int'][i]])
+        p_tracks['ego_motion'] = copy.deepcopy(p_tracks['ego_speed'])
+        v_tracks['ego_motion'] = copy.deepcopy(v_tracks['ego_speed'])
         # n_long = 0
         # n_short = 0
         # for oid in track_dict['ped']:
@@ -540,6 +580,140 @@ class BDD100kDataset(torch.utils.data.Dataset):
         # print(n_long, n_short)
         # pdb.set_trace()
         return p_tracks, v_tracks
+
+    def get_neighbor_relation(self,
+                      samples,
+                      save_path,
+                      padding_val=0):
+        if os.path.exists(save_path):
+            with open(save_path, 'rb') as f:
+                neighbor_seq = pickle.load(f)
+        else:
+            n_sample = len(samples['obs']['bbox'])
+            relations = []
+            neighbor_bbox = []
+            neighbor_oid = []
+            neighbor_cls = []
+            print('Getting neighbor sequences')
+            for i in tqdm(range(n_sample)):
+                target_cid = samples['obs']['vid_id'][i][0]  # str
+                target_oid = samples['obs']['obj_id'][i][0]  # str
+                target_bbox_seq = np.array(samples['obs']['bbox'][i])  # T, 4
+                obslen = len(target_bbox_seq)
+                bbox_seq_dict = {'ped':{},
+                                'veh':{}}
+                for j in range(obslen):
+                    imgnm = samples['obs']['img_id'][i][j]  # str
+                    cur_ped_ids = set(self.imgnm_to_objid[target_cid][imgnm]['ped'].keys())
+                    cur_ped_ids.remove(target_oid)
+                    cur_veh_ids = set(self.imgnm_to_objid[target_cid][imgnm]['veh'].keys())
+                    # ped neighbor for cur sample
+                    # existing neighbor
+                    for oid in set(bbox_seq_dict.keys())&cur_ped_ids:
+                        bbox = np.array(self.imgnm_to_objid[target_cid][imgnm]['ped'][oid]['bbox'])
+                        bbox_seq_dict['ped'][oid].append(bbox)
+                    # first appearing neighbor
+                    for oid in cur_ped_ids-set(bbox_seq_dict.keys()):
+                        bbox = np.array(self.imgnm_to_objid[target_cid][imgnm]['ped'][oid]['bbox'])
+                        bbox_seq_dict['ped'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
+                    # disappeared neighbor
+                    for oid in set(bbox_seq_dict.keys())-cur_ped_ids:
+                        bbox_seq_dict['ped'][oid].append(np.ones([4])*padding_val)
+                    # veh neighbor for cur sample
+                    # existing neighbor
+                    for oid in set(bbox_seq_dict.keys())&cur_veh_ids:
+                        bbox = np.array(self.imgnm_to_objid[target_cid][imgnm]['veh'][oid]['bbox'])
+                        bbox_seq_dict['veh'][oid].append(bbox)
+                    # first appearing neighbor
+                    for oid in cur_veh_ids-set(bbox_seq_dict.keys()):
+                        bbox = np.array(self.imgnm_to_objid[target_cid][imgnm]['veh'][oid]['bbox'])
+                        bbox_seq_dict['veh'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
+                    # disappeared neighbor
+                    for oid in set(bbox_seq_dict.keys())-cur_veh_ids:
+                        bbox_seq_dict['veh'][oid].append(np.ones([4])*padding_val)
+                cur_neighbor_bbox = []
+                cur_neighbor_oid = []
+                cur_neighbor_cls = []
+                for oid in bbox_seq_dict['ped']:
+                    cur_neighbor_bbox.append(bbox_seq_dict['ped'][oid])  # T, 4
+                    cur_neighbor_oid.append(int(oid))
+                    cur_neighbor_cls.append(0)
+                for oid in bbox_seq_dict['veh']:
+                    cur_neighbor_bbox.append(bbox_seq_dict['veh'][oid])  # T, 4
+                    cur_neighbor_oid.append(int(oid))
+                    cur_neighbor_cls.append(1)
+                cur_neighbor_bbox = np.array(cur_neighbor_bbox)  # K T 4
+                cur_neighbor_oid = np.array(cur_neighbor_oid)  # K,
+                cur_neighbor_cls = np.array(cur_neighbor_cls)  # K,
+                cur_relations = bbox2d_relation_multi_seq(target_bbox_seq,
+                                                        cur_neighbor_bbox,
+                                                        rela_func='log_bbox_reg')  # K T 4
+                # concat cls label to relations
+                cur_relations = np.concatenate([cur_relations, 
+                                                np.reshape(cur_neighbor_cls, [-1,1,1])],
+                                                -1)
+                relations.append(cur_relations)  # K T 5
+                neighbor_bbox.append(cur_neighbor_bbox)  # K T 4
+                neighbor_oid.append(cur_neighbor_oid)  # K
+                neighbor_cls.append(cur_neighbor_cls)  # K
+            neighbor_seq = {}
+            neighbor_seq['neighbor_relations'] = relations
+            neighbor_seq['neighbor_bbox'] = neighbor_bbox
+            neighbor_seq['neighbor_oid'] = neighbor_oid
+            neighbor_seq['neighbor_cls'] = neighbor_cls
+            with open(save_path, 'wb') as f:
+                pickle.dump(neighbor_seq, f)
+        # add neighbor info to samples
+        for k in neighbor_seq:
+            samples['obs'][k] = neighbor_seq[k]
+        return samples
+
+    def get_imgnm_to_objid(self,
+                           p_tracks, 
+                           v_tracks, 
+                           save_path):
+        # vid id --> img nm --> obj type --> obj id -> bbox
+        imgnm_to_oid_to_info = {}
+        n_p_tracks = len(p_tracks['bbox'])
+        print(f'Saving img_nm to obj_id dict of {self.dataset_name}')
+        print('Pedestrian')
+        for i in range(n_p_tracks):
+            cid = p_tracks['vid_id'][i][0]
+            oid = p_tracks['obj_id'][i][0]
+            if cid not in imgnm_to_oid_to_info:
+                imgnm_to_oid_to_info[cid] = {}
+            for j in range(len(p_tracks['img_id'][i])):
+                imgnm = p_tracks['img_id'][i][j]
+                # initialize the dict of the img
+                if imgnm not in imgnm_to_oid_to_info[cid]:
+                    imgnm_to_oid_to_info[cid][imgnm] = {}
+                    imgnm_to_oid_to_info[cid][imgnm]['ped'] = {}
+                    imgnm_to_oid_to_info[cid][imgnm]['veh'] = {}
+                # initialize the dict of the obj
+                bbox = p_tracks['bbox'][i][j]
+                imgnm_to_oid_to_info[cid][imgnm]['ped'][oid] = {}
+                imgnm_to_oid_to_info[cid][imgnm]['ped'][oid]['bbox'] = bbox
+        print('Vehicle')
+        n_v_tracks = len(v_tracks['bbox'])
+        for i in range(n_v_tracks):
+            cid = v_tracks['vid_id'][i][0]
+            oid = v_tracks['obj_id'][i][0]
+            if cid not in imgnm_to_oid_to_info:
+                imgnm_to_oid_to_info[cid] = {}
+            for j in range(len(v_tracks['img_id'][i])):
+                imgnm = v_tracks['img_id'][i][j]
+                # initialize the dict of the img
+                if imgnm not in imgnm_to_oid_to_info[cid]:
+                    imgnm_to_oid_to_info[cid][imgnm] = {}
+                    imgnm_to_oid_to_info[cid][imgnm]['ped'] = {}
+                    imgnm_to_oid_to_info[cid][imgnm]['veh'] = {}
+                # initialize the dict of the obj
+                bbox = v_tracks['bbox'][i][j]
+                imgnm_to_oid_to_info[cid][imgnm]['veh'][oid] = {}
+                imgnm_to_oid_to_info[cid][imgnm]['veh'][oid]['bbox'] = bbox        
+        
+        with open(save_path, 'wb') as f:
+            pickle.dump(imgnm_to_oid_to_info, f)
 
     def _get_accel(self, obj_tracks):
         print('Getting ego acceleration')
@@ -574,7 +748,8 @@ class BDD100kDataset(torch.utils.data.Dataset):
             for i in range(len(new_tracks[k])):
                 assert len(new_tracks[k][i]) == len(new_tracks['ego_accel'][i]), \
                     (len(new_tracks[k][i]), len(new_tracks['ego_accel'][i]))
-        
+        if 'accel' in self.ego_format:
+            new_tracks['ego_motion'] = copy.deepcopy(new_tracks['ego_accel'])
         return new_tracks
     
     def tracks_to_samples(self, tracks):
@@ -613,9 +788,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                 bbox_normed[i] = np.subtract(bbox_normed[i][:], bbox_normed[i][0]).tolist()
         samples['bbox_normed'] = bbox_normed
         # choose ego motion quantity
-        # choose ego motion quantity
-        samples['ego_motion'] = copy.deepcopy(samples['ego_accel']) \
-            if 'accel' in self.ego_format else copy.deepcopy(samples['ego_speed'])
+        
         # split obs and pred
         print('---------------Split obs and pred---------------')
         obs_slices = {}

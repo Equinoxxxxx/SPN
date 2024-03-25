@@ -31,6 +31,19 @@ def ltrb2xywh_seq(ltrb_seq):
     assert xywh_seq.shape == ltrb_seq.shape
     return xywh_seq.astype(int)
 
+def ltrb2xywh_multi_seq(ltrb_seq):
+    '''
+    lrtb_seq: ndarray(K, T, 4)
+    '''
+    ltrb_seq = np.array(ltrb_seq)
+    xs = (ltrb_seq[:, :, 0]+ltrb_seq[:, :, 2]) / 2
+    ys = (ltrb_seq[:, :, 1]+ltrb_seq[:, :, 3]) / 2
+    ws = ltrb_seq[:, :, 2] - ltrb_seq[:, :, 0]
+    hs = ltrb_seq[:, :, 3] - ltrb_seq[:, :, 1]
+    xywh_seq = np.stack([xs, ys, ws, hs], axis=2)
+    assert xywh_seq.shape == ltrb_seq.shape
+    return xywh_seq.astype(int)
+
 def xywh2ltrb_seq(xywh_seq):
     '''
     xywh_seq: ndarray(T, 4)
@@ -112,22 +125,39 @@ def closest_neighbor_relation(seq,
     neighbor_relations = bbox2d_relation_multi_seq(seq, 
                                                    neighbor_seqs, 
                                                    rela_func)
-    
 
-def get_neighbor_idx(bbox_relations,
-                     max_n_neighbor, 
-                     mode='random'):
+def pad_neighbor(neighbor_data,
+                max_n_neighbor,
+                eps=1e-5):
     '''
-    bbox_relations: ndarray(n_neighbor, T, 4)
+    neighbor_data: list[ndarray K (T 4(5))]
     '''
-    dist = np.abs(bbox_relations)
-    if mode == 'random':
-        idx = list(range(bbox_relations.shape[0]))
-        random.shuffle(idx)
+    n_all = neighbor_data[0].shape[0]
+    if n_all > max_n_neighbor:
+        idx = list(range(n_all))
+        idx = random.shuffle(idx)
         idx = idx[:max_n_neighbor]
+        new_data = []
+        for d in neighbor_data:
+            new_data.append(d[idx])
+        return new_data
     else:
-        raise ValueError(mode)
-    return idx
+        new_data = []
+        for d in neighbor_data:
+            # oid
+            if len(d.shape) == 1:
+                padding_val = -1
+            # bbox
+            elif d.shape[-1] == 4:
+                padding_val = 0
+            # relation
+            else:
+                padding_val = np.log(eps)
+            padding = np.ones([max_n_neighbor-n_all]+d.shape[1:]) * padding_val
+            new_data.append(np.concatenate([d, padding], 0))
+        return new_data
+
+
 
 
 if __name__ == '__main__':

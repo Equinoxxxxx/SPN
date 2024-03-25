@@ -22,9 +22,15 @@ from ..utils import mapping_20, makedir, ltrb2xywh, coord2pseudo_heatmap, cls_we
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
 from ..data.normalize import img_mean_std, norm_imgs
 from ..general import HiddenPrints
+from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
 from .dataset_id import DATASET2ID, ID2DATASET
+from config import dataset_root
 
 
+# PIE: set id --> video id --> img id
+#                          --> ped id
+# JAAD: video id --> img id
+#                --> ped id
 class PIEDataset(Dataset):
     def __init__(self, 
                  dataset_name='PIE', 
@@ -39,7 +45,7 @@ class PIEDataset(Dataset):
                  bbox_size=(224, 224), ctx_size=(224, 224), 
                  color_order='BGR', crop_from_ori=False,
                  resize_mode='even_padded', min_wh=None, max_occ=2, 
-                 modalities=['img', 'sklt', 'ctx', 'traj', 'ego'],
+                 modalities=['img', 'sklt', 'ctx', 'traj', 'ego', 'social'],
                  img_format='',
                  sklt_format='coord', 
                  ctx_format='ori_local', 
@@ -53,6 +59,7 @@ class PIEDataset(Dataset):
                  augment_mode='random_hflip',
                  seg_cls=['person', 'vehicle', 'road', 'traffic_light'],
                  speed_unit='m/s',
+                 max_n_neighbor=10,
                  ):
         super(Dataset, self).__init__()
         self.dataset_name = dataset_name
@@ -91,6 +98,7 @@ class PIEDataset(Dataset):
         self.pred_context_mode = pred_context_mode
         self.augment_mode = augment_mode
         self.seg_cls = seg_cls
+        self.max_n_neighbor = max_n_neighbor
         self.ego_motion_key = 'ego_accel' if 'accel' in self.ego_format else 'obd_speed'
         if self.dataset_name == 'JAAD':
             self.ego_motion_key = 'vehicle_act'
@@ -103,12 +111,7 @@ class PIEDataset(Dataset):
 
         # data opts
         if dataset_name == 'PIE':
-            self.root_path = '/home/y_feng/workspace6/datasets/PIE_dataset'
-            self.sk_vis_path = '/home/y_feng/workspace6/datasets/PIE_dataset/sk_vis/even_padded/288w_by_384h/'
-            self.sk_coord_path = '/home/y_feng/workspace6/datasets/PIE_dataset/sk_coords/even_padded/288w_by_384h/'
-            self.sk_heatmap_path = '/home/y_feng/workspace6/datasets/PIE_dataset/sk_heatmaps/even_padded/288w_by_384h/'
-            self.sk_p_heatmap_path = '/home/y_feng/workspace6/datasets/PIE_dataset/sk_pseudo_heatmaps/even_padded/48w_by_48h/'
-            self.sam_seg_root = '/home/y_feng/workspace6/datasets/PIE_dataset/seg_sam'
+            self.root_path = os.path.join(dataset_root, 'PIE_dataset')
             self.data_opts = {'normalize_bbox': normalize_pos,
                          'fstride': 1,
                          'sample_type': 'all',
@@ -133,12 +136,7 @@ class PIEDataset(Dataset):
             with HiddenPrints():
                 data_base = PIE(data_path=self.root_path)
         else:
-            self.root_path = '/home/y_feng/workspace6/datasets/JAAD'
-            self.sk_vis_path = '/home/y_feng/workspace6/datasets/JAAD/sk_vis/even_padded/288w_by_384h/'
-            self.sk_coord_path = '/home/y_feng/workspace6/datasets/JAAD/sk_coords/even_padded/288w_by_384h/'
-            self.sk_heatmap_path = '/home/y_feng/workspace6/datasets/JAAD/sk_heatmaps/even_padded/288w_by_384h/'
-            self.sk_p_heatmap_path = '/home/y_feng/workspace6/datasets/JAAD/sk_pseudo_heatmaps/even_padded/48w_by_48h/'
-            self.sam_seg_root = '/home/y_feng/workspace6/datasets/JAAD/seg_sam'
+            self.root_path = os.path.join(dataset_root, 'JAAD')
             self.data_opts = {'fstride': 1,
                             'sample_type': 'all',  
                             'subset': 'default',
@@ -154,6 +152,12 @@ class PIEDataset(Dataset):
                             'kfold_params': {'num_folds': 5, 'fold': 1}}
             with HiddenPrints():
                 data_base = JAAD(data_path=self.root_path)
+        self.extra_root = self.root_path
+        self.sk_vis_path = os.path.join(self.root_path, '/sk_vis/even_padded/288w_by_384h/')
+        self.sk_coord_path = os.path.join(self.root_path, 'sk_coords/even_padded/288w_by_384h/')
+        self.sk_heatmap_path = os.path.join(self.root_path, 'sk_heatmaps/even_padded/288w_by_384h/')
+        self.sk_p_heatmap_path = os.path.join(self.root_path, 'sk_pseudo_heatmaps/even_padded/48w_by_48h/')
+        self.sam_seg_root = os.path.join(self.root_path, 'seg_sam')
         self.veh_info_path = os.path.join(self.root_path, 'veh_tracks.pkl')
         self.imgnm_to_objid_path = os.path.join(self.root_path, 
                                                 'imgnm_to_objid_to_ann.pkl')
@@ -214,6 +218,12 @@ class PIEDataset(Dataset):
         for k in tqdm(self.samples.keys()):
             self.samples[k] = np.array(self.samples[k])
         self.num_samples = len(self.samples['obs_image_paths'])
+        # get neighbors
+        if 'social' in self.modalities:
+            self.neighbor_seq_path = os.path.join(self.extra_root,
+                f'{self.dataset_name}_fps_{self.fps}_obs_{self.obs_len}_pred_{self.pred_len}_interval_{self.seq_interval}_overlap_{self.overlap_ratio}.pkl')
+            self.samples = self.get_neighbor_relation(self.samples,
+                                                self.neighbor_seq_path)
         # remove small bbox
         if min_wh is not None:
             self.samples = self.rm_small_bb(self.samples, min_wh)
@@ -335,10 +345,21 @@ class PIEDataset(Dataset):
                 'img_ijhw': torch.tensor([-1, -1, -1, -1]),
                 'ctx_ijhw': torch.tensor([-1, -1, -1, -1]),
                 'sklt_ijhw': torch.tensor([-1, -1, -1, -1]),
+                'obs_neighbor_relation': torch.zeros((1, self.obs_len, 5)),
+                'obs_neighbor_bbox': torch.zeros((1, self.obs_len, 4)),
+                'obs_neighbor_oid': torch.zeros((1,)),
                 }
         # if self.dataset_name == 'PIE':
         #     sample['set_id_int'] = self.samples['obs_set_id_int'][idx]
-
+        if 'social' in self.modalities:
+            relations, neighbor_bbox, neighbor_oid =\
+                  pad_neighbor([self.samples['obs_neighbor_relations'][idx],
+                                self.samples['obs_neighbor_bbox'][idx],
+                                self.samples['obs_neighbor_oid'][idx]],
+                                self.max_n_neighbor)
+            sample['obs_neighbor_relation'] = torch.tensor(relations).float()
+            sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
+            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid)
         if 'sklt' in self.modalities:
             if 'coord' in self.sklt_format:
                 pid = self.samples['obs_pid'][idx][0][0]
@@ -779,17 +800,100 @@ class PIEDataset(Dataset):
                     (len(new_tracks[k][i]), len(new_tracks['ego_accel'][i]))
         return new_tracks
 
-    def _get_neighbors(self, sample):
-        '''
-        Get the neighbors' info of the target pedestrian during 
-        the observation length
-        '''
-        
-        pass
+    def get_neighbor_relation(self,
+                      samples,
+                      save_path,
+                      padding_val=0):
+        if os.path.exists(save_path):
+            with open(save_path, 'rb') as f:
+                neighbor_seq = pickle.load(f)
+        else:
+            n_sample = len(samples['obs_bbox'])
+            relations = []
+            neighbor_bbox = []
+            neighbor_oid = []
+            neighbor_cls = []
+            print('Getting neighbor sequences')
+            for i in tqdm(range(n_sample)):
+                target_cid = str(samples['obs_vid_id_int'][i][0])  # str
+                target_oid = str(samples['obs_ped_id_int'][i][0])  # str
+                if self.dataset_name == 'PIE':
+                    target_sid = str(samples['obs_set_id_int'][i][0])  # str
+                    vid_dict = self.imgnm_to_objid[target_sid][target_cid]
+                else:
+                    vid_dict = self.imgnm_to_objid[target_cid]
+                target_bbox_seq = np.array(samples['obs_bbox'][i])  # T, 4
+                obslen = len(target_bbox_seq)
+                bbox_seq_dict = {'ped':{},
+                                'veh':{}}
+                for j in range(obslen):
+                    imgnm = samples['obs']['img_nm'][i][j]  # str
+                    cur_ped_ids = set(vid_dict[imgnm]['ped'].keys())
+                    cur_ped_ids.remove(target_oid)
+                    cur_veh_ids = set(vid_dict[imgnm]['veh'].keys())
+                    # ped neighbor for cur sample
+                    # existing neighbor
+                    for oid in set(bbox_seq_dict.keys())&cur_ped_ids:
+                        bbox = np.array(vid_dict[imgnm]['ped'][oid]['bbox'])
+                        bbox_seq_dict['ped'][oid].append(bbox)
+                    # first appearing neighbor
+                    for oid in cur_ped_ids-set(bbox_seq_dict.keys()):
+                        bbox = np.array(vid_dict[imgnm]['ped'][oid]['bbox'])
+                        bbox_seq_dict['ped'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
+                    # disappeared neighbor
+                    for oid in set(bbox_seq_dict.keys())-cur_ped_ids:
+                        bbox_seq_dict['ped'][oid].append(np.ones([4])*padding_val)
+                    # veh neighbor for cur sample
+                    # existing neighbor
+                    for oid in set(bbox_seq_dict.keys())&cur_veh_ids:
+                        bbox = np.array(vid_dict[imgnm]['veh'][oid]['bbox'])
+                        bbox_seq_dict['veh'][oid].append(bbox)
+                    # first appearing neighbor
+                    for oid in cur_veh_ids-set(bbox_seq_dict.keys()):
+                        bbox = np.array(vid_dict[imgnm]['veh'][oid]['bbox'])
+                        bbox_seq_dict['veh'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
+                    # disappeared neighbor
+                    for oid in set(bbox_seq_dict.keys())-cur_veh_ids:
+                        bbox_seq_dict['veh'][oid].append(np.ones([4])*padding_val)
+                cur_neighbor_bbox = []
+                cur_neighbor_oid = []
+                cur_neighbor_cls = []
+                for oid in bbox_seq_dict['ped']:
+                    cur_neighbor_bbox.append(bbox_seq_dict['ped'][oid])  # T, 4
+                    cur_neighbor_oid.append(int(oid))
+                    cur_neighbor_cls.append(0)
+                for oid in bbox_seq_dict['veh']:
+                    cur_neighbor_bbox.append(bbox_seq_dict['veh'][oid])  # T, 4
+                    cur_neighbor_oid.append(int(oid))
+                    cur_neighbor_cls.append(1)
+                cur_neighbor_bbox = np.array(cur_neighbor_bbox)  # K T 4
+                cur_neighbor_oid = np.array(cur_neighbor_oid)  # K,
+                cur_neighbor_cls = np.array(cur_neighbor_cls)  # K,
+                cur_relations = bbox2d_relation_multi_seq(target_bbox_seq,
+                                                        cur_neighbor_bbox,
+                                                        rela_func='log_bbox_reg')  # K T 4
+                # concat cls label to relations
+                cur_relations = np.concatenate([cur_relations, 
+                                                np.reshape(cur_neighbor_cls, [-1,1,1])],
+                                                -1)
+                relations.append(cur_relations)  # K T 5
+                neighbor_bbox.append(cur_neighbor_bbox)  # K T 4
+                neighbor_oid.append(cur_neighbor_oid)  # K
+                neighbor_cls.append(cur_neighbor_cls)  # K
+            neighbor_seq = {}
+            neighbor_seq['obs_neighbor_relations'] = relations
+            neighbor_seq['obs_neighbor_bbox'] = neighbor_bbox
+            neighbor_seq['obs_neighbor_oid'] = neighbor_oid
+            neighbor_seq['obs_neighbor_cls'] = neighbor_cls
+            with open(save_path, 'wb') as f:
+                pickle.dump(neighbor_seq, f)
+        # add neighbor info to samples
+        for k in neighbor_seq:
+            samples[k] = neighbor_seq[k]
+        return samples
     
     def get_imgnm_to_objid(self, p_tracks, v_tracks, save_path):
-        # cid_to_imgnm_to_oid_to_info: cid -> img name -> obj type (ped/veh) 
-        # -> obj id -> bbox/ego motion
+        # cid_to_imgnm_to_oid_to_info: cid -> img name -> obj type (ped/veh) -> obj id -> bbox/ego motion
         imgnm_to_oid_to_info = {}
         
         if self.dataset_name == 'PIE':
