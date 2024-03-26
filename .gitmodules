@@ -1,5 +1,5 @@
 [submodule "simple-HRNet"]
-	path = simple-HRNet
+	path = simple_HRNet
 	url = git@github.com:Equinoxxxxx/simple-HRNet.git
 [submodule "yolo_tracking"]
 	path = yolo_tracking
