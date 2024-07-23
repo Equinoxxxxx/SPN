@@ -177,7 +177,7 @@ def get_skeleton_bdd100k(img_root=os.path.join(dataset_root,
                                'even_padded',
                                '288w_by_384h')
     model = SimpleHRNet(c=48, nof_joints=17, 
-                        checkpoint_path=os.path.join(cktp_root, "/pose_hrnet_w48_384x288.pth"), 
+                        checkpoint_path=os.path.join(cktp_root, "pose_hrnet_w48_384x288.pth"), 
                         multiperson=False, return_heatmaps=True, resolution=(384, 288))
     for oid in tqdm(os.listdir(img_root)):
         img_oid_dir = os.path.join(img_root, oid)
@@ -240,7 +240,7 @@ def get_skeletons(datasets):
     pseudo_h = 48
     pseudo_w = 48
     model = SimpleHRNet(c=48, nof_joints=17, 
-                        checkpoint_path=os.path.join(cktp_root, "/pose_hrnet_w48_384x288.pth"), 
+                        checkpoint_path=os.path.join(cktp_root, "pose_hrnet_w48_384x288.pth"), 
                         multiperson=False, return_heatmaps=True, resolution=(384, 288))
     print('Estimating pose')
     if 'PIE' in datasets:

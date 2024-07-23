@@ -25,7 +25,7 @@ from ultralytics.utils.plotting import save_one_box
 
 from examples.utils import write_mot_results
 from tools.utils import makedir
-from tools.data.preprocess import crop_img
+from tools.data.crop_images import crop_img
 from config import dataset_root
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -156,7 +156,7 @@ def track(dataset_names='PIE_bdd100k',
         track_info_path = \
             os.path.join(dataset_root, 'PIE_dataset/veh_tracks.pkl')
         img_root = \
-            os.path.join(dataset_root, '/PIE_dataset/images')
+            os.path.join(dataset_root, 'PIE_dataset/images')
         crop_veh_root = \
             os.path.join(dataset_root,
                          'PIE_dataset/cropped_images_veh', 
@@ -326,8 +326,8 @@ def track(dataset_names='PIE_bdd100k',
     if 'JAAD' in dataset_names:
         print(f'Tracking {obj_types} in JAAD')
         cid_to_oid = {}  # vid id --> obj id --> bbox seq & img nm seq
-        track_info_path = os.path.join(dataset_root, '/JAAD/veh_tracks.pkl')
-        img_root = os.path.join(dataset_root, '/JAAD/images')
+        track_info_path = os.path.join(dataset_root, 'JAAD/veh_tracks.pkl')
+        img_root = os.path.join(dataset_root, 'JAAD/images')
         crop_veh_root = \
             os.path.join(dataset_root,
                          'JAAD/cropped_images_veh', 

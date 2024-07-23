@@ -353,9 +353,9 @@ def crop_ctx_PIE_JAAD(mode='ori_local', target_size=(224, 224), dataset_name='PI
             print(i, ped_dir, 'done')
 
 def crop_img_TITAN(tracks, resize_mode='even_padded', target_size=(224, 224), obj_type='p'):
-    crop_root = os.path.join(dataset_root, '/TITAN/TITAN_extra/cropped_images')
+    crop_root = os.path.join(dataset_root, 'TITAN/TITAN_extra/cropped_images')
     makedir(crop_root)
-    data_root = os.path.join(dataset_root, '/TITAN/honda_titan_dataset/dataset')
+    data_root = os.path.join(dataset_root, 'TITAN/honda_titan_dataset/dataset')
     if obj_type == 'p':
         crop_obj_path = os.path.join(crop_root, resize_mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'ped')
         makedir(crop_obj_path)
@@ -405,9 +405,9 @@ def crop_img_TITAN(tracks, resize_mode='even_padded', target_size=(224, 224), ob
 
 def crop_ctx_TITAN(tracks, mode='ori_local', target_size=(224, 224), obj_type='p'):
     ori_H, ori_W = 1520, 2704
-    crop_root = os.path.join(dataset_root, '/TITAN/TITAN_extra/context')
+    crop_root = os.path.join(dataset_root, 'TITAN/TITAN_extra/context')
     makedir(crop_root)
-    data_root = os.path.join(dataset_root, '/TITAN/honda_titan_dataset/dataset')
+    data_root = os.path.join(dataset_root, 'TITAN/honda_titan_dataset/dataset')
     if obj_type == 'p':
         crop_obj_path = os.path.join(crop_root, mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'ped')
         makedir(crop_obj_path)
@@ -500,28 +500,28 @@ def crop_img_ctx_nusc(obj_type='ped', sensor='CAM_FRONT', modality='img', resize
     print(f'{obj_type}, {sensor}, {modality}, {resize_mode}')
     nusc = NuScenes(version='v1.0-trainval', dataroot=NUSC_ROOT, verbose=True)
 
-    f = open(os.path.join(dataset_root, '/nusc/extra/trainval_token_to_sample_id.pkl'), 'rb')
+    f = open(os.path.join(dataset_root, 'nusc/extra/trainval_token_to_sample_id.pkl'), 'rb')
     token_to_sample_id = pickle.load(f)
     f.close()
 
-    f = open(os.path.join(dataset_root, '/nusc/extra/trainval_token_to_instance_id.pkl', 'rb'))
+    f = open(os.path.join(dataset_root, 'nusc/extra/trainval_token_to_instance_id.pkl', 'rb'))
     token_to_instance_id = pickle.load(f)
     f.close()
 
-    f = open(os.path.join(dataset_root, '/nusc/extra', '_'.join(['anns_train', obj_type, sensor])+'.pkl'), 'rb')
+    f = open(os.path.join(dataset_root, 'nusc/extra', '_'.join(['anns_train', obj_type, sensor])+'.pkl'), 'rb')
     instk_to_anntks = pickle.load(f)
     f.close()
-    f = open(os.path.join(dataset_root, '/nusc/extra', '_'.join(['anns_val', obj_type, sensor])+'.pkl'), 'rb')
+    f = open(os.path.join(dataset_root, 'nusc/extra', '_'.join(['anns_val', obj_type, sensor])+'.pkl'), 'rb')
     val_instk_to_anntks = pickle.load(f)
     f.close()
     instk_to_anntks.update(val_instk_to_anntks)
 
     if modality == 'img':
-        root = os.path.join(dataset_root, '/nusc/extra/cropped_images')
+        root = os.path.join(dataset_root, 'nusc/extra/cropped_images')
         root = os.path.join(root, sensor, resize_mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', obj_type)
         makedir(root)
     elif modality == 'ctx':
-        root = os.path.join(dataset_root, '/nusc/extra/context')
+        root = os.path.join(dataset_root, 'nusc/extra/context')
         root = os.path.join(root, sensor, resize_mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', obj_type)
         makedir(root)
 
@@ -554,7 +554,7 @@ def crop_img_ctx_nusc(obj_type='ped', sensor='CAM_FRONT', modality='img', resize
             save_path = os.path.join(ins_path, samid+'.png')
             cv2.imwrite(save_path, cropped_img)
 
-def crop_img_ctx_bdd100k(data_root=os.path.join(dataset_root, '/BDD100k/bdd100k'),
+def crop_img_ctx_bdd100k(data_root=os.path.join(dataset_root, 'BDD100k/bdd100k'),
                      sub_set='train_val',
                      resize_mode='even_padded',
                      ctx_format='ori_local',

@@ -132,10 +132,11 @@ def pad_neighbor(neighbor_data,
     '''
     neighbor_data: list[ndarray K (T 4(5))]
     '''
+    
     n_all = neighbor_data[0].shape[0]
     if n_all > max_n_neighbor:
         idx = list(range(n_all))
-        idx = random.shuffle(idx)
+        random.shuffle(idx)
         idx = idx[:max_n_neighbor]
         new_data = []
         for d in neighbor_data:
@@ -153,8 +154,9 @@ def pad_neighbor(neighbor_data,
             # relation
             else:
                 padding_val = np.log(eps)
-            padding = np.ones([max_n_neighbor-n_all]+d.shape[1:]) * padding_val
+            padding = np.ones([max_n_neighbor-n_all]+list(d.shape)[1:]) * padding_val
             new_data.append(np.concatenate([d, padding], 0))
+        
         return new_data
 
 

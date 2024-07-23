@@ -2,7 +2,7 @@ from nuscenes.nuscenes import NuScenes
 from nuscenes.utils.geometry_utils import view_points
 from ..data.nusc_split import TRAIN_SC, VAL_SC
 from ..data.coord_transform import nusc_3dbbox_to_2dbbox
-from ..visualize import draw_box, draw_boxes_on_img
+from ..visualize.visualize_bbox import draw_box, draw_boxes_on_img
 from ..utils import makedir
 from ..data.normalize import img_mean_std, norm_imgs
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
@@ -123,14 +123,14 @@ class NuscDataset(torch.utils.data.Dataset):
 
 
         # get cid to img name to obj id dict
-        if not os.path.exists(self.imgnm_to_objid_path):
+        if os.path.exists(self.imgnm_to_objid_path):
+            with open(self.imgnm_to_objid_path, 'rb') as f:
+                self.imgnm_to_objid = pickle.load(f)
+        else:
             self.imgnm_to_objid = \
                 self.get_imgnm_to_objid(self.p_tracks, 
                                         self.v_tracks, 
                                         self.imgnm_to_objid_path)
-        else:
-            with open(self.imgnm_to_objid_path, 'rb') as f:
-                self.imgnm_to_objid = pickle.load(f)
         
         # convert tracks into samples
         self.samples = self.tracks_to_samples(self.p_tracks)
@@ -170,6 +170,7 @@ class NuscDataset(torch.utils.data.Dataset):
         obs_bbox = torch.tensor(self.samples['obs']['bbox_2d_normed'][idx]).float()
         obs_bbox_unnormed = torch.tensor(self.samples['obs']['bbox_2d'][idx]).float()  # ltrb
         pred_bbox = torch.tensor(self.samples['pred']['bbox_2d_normed'][idx]).float()
+        pred_bbox_unnormed = torch.tensor(self.samples['pred']['bbox_2d'][idx]).float()
         obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float()
         sce_id_int = torch.tensor(int(self.samples['obs']['sce_id'][idx][0]))
         ins_id_int = torch.tensor(int(float(self.samples['obs']['ins_id'][idx][0])))
@@ -181,6 +182,10 @@ class NuscDataset(torch.utils.data.Dataset):
             obs_bbox[:, 2] /= self.img_size[1]
             obs_bbox[:, 1] /= self.img_size[0]
             obs_bbox[:, 3] /= self.img_size[0]
+            pred_bbox[:, 0] /= self.img_size[1]
+            pred_bbox[:, 2] /= self.img_size[1]
+            pred_bbox[:, 1] /= self.img_size[0]
+            pred_bbox[:, 3] /= self.img_size[0]
         sample = {'dataset_name': torch.tensor(DATASET2ID[self.dataset_name]),
                   'set_id_int': torch.tensor(-1),
                   'vid_id_int': sce_id_int,  # int
@@ -191,6 +196,7 @@ class NuscDataset(torch.utils.data.Dataset):
                   'obs_ego': obs_ego,
                   'pred_act': torch.tensor(-1),
                   'pred_bboxes': pred_bbox,
+                  'pred_bboxes_unnormed': pred_bbox_unnormed,
                   'atomic_actions': torch.tensor(-1),
                   'simple_context': torch.tensor(-1),
                   'complex_context': torch.tensor(-1),  # (1,)
@@ -207,8 +213,8 @@ class NuscDataset(torch.utils.data.Dataset):
                   }
         if 'social' in self.modalities:
             relations, neighbor_bbox, neighbor_oid =\
-                  pad_neighbor([self.samples['obs']['neighbor_relations'][idx],
-                                self.samples['obs']['neighbor_bbox_2d'][idx],
+                  pad_neighbor([np.array(self.samples['obs']['neighbor_relations'][idx]).transpose(1,0,2),
+                                np.array(self.samples['obs']['neighbor_bbox_2d'][idx]).transpose(1,0,2),
                                 self.samples['obs']['neighbor_oid'][idx]],
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()
@@ -252,15 +258,34 @@ class NuscDataset(torch.utils.data.Dataset):
                     heatmap = pickle.load(f)
                 sklts.append(heatmap)
             sklts = np.stack(sklts, axis=0)  # T, ...
+            pred_sklts = []
+            interm_dir = 'even_padded/48w_by_48h' \
+                if self.sklt_format == 'pseudo_heatmap' else 'even_padded/288w_by_384h'
+            for sam_id in self.samples['pred']['sam_id'][idx]:
+                sklt_path = os.path.join(self.extra_root,
+                                        'sk_'+self.sklt_format.replace('0-1', '')+'s',
+                                        interm_dir,
+                                        str(self.samples['pred']['ins_id'][idx][0]),
+                                        str(sam_id)+'.pkl'
+                                        )
+                with open(sklt_path, 'rb') as f:
+                    heatmap = pickle.load(f)
+                pred_sklts.append(heatmap)
+            pred_sklts = np.stack(pred_sklts, axis=0)  # T, ...
             if 'coord' in self.sklt_format:
                 obs_skeletons = torch.from_numpy(sklts).float().permute(2, 0, 1)[:2]  # shape: (2, T, nj)
+                pred_skeletons = torch.from_numpy(pred_sklts).float().permute(2, 0, 1)[:2]
                 if '0-1' in self.sklt_format:
                     obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
                     obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
+                    pred_skeletons[0] = pred_skeletons[0] / self.img_size[0]
+                    pred_skeletons[1] = pred_skeletons[1] / self.img_size[1]
             elif self.sklt_format == 'pseudo_heatmap':
                 # T C H W -> C T H W
                 obs_skeletons = torch.from_numpy(sklts).float().permute(1, 0, 2, 3)  # shape: (17, seq_len, 48, 48)
+                pred_skeletons = torch.from_numpy(pred_sklts).float().permute(1, 0, 2, 3)
             sample['obs_skeletons'] = obs_skeletons
+            sample['pred_skeletons'] = pred_skeletons
         if 'ctx' in self.modalities:
             if self.ctx_format in ('local', 'ori_local', 'mask_ped', 'ori',
                                    'ped_graph'):
@@ -482,7 +507,8 @@ class NuscDataset(torch.utils.data.Dataset):
                     'bbox_2d': [],
                     'ego_speed': []}
         # discard the last frame
-        min_track_len = self._obs_len + self._pred_len + 1  
+        # min_track_len = self._obs_len + self._pred_len + 1
+        min_track_len = 3
         anns_path = '_'.join(['anns', 
                               self.subset, 
                               obj_type, 
@@ -619,7 +645,7 @@ class NuscDataset(torch.utils.data.Dataset):
         tracks = p_tracks
         n_tracks = len(tracks['bbox_2d'])
         print('Saving imgnm to objid to obj info of pedestrians in nuScenes')
-        for i in range(n_tracks):
+        for i in tqdm(range(n_tracks)):
             ins_id = str(tracks['ins_id'][i][0])
             sam_ids = tracks['sam_id'][i]
             for j in range(len(sam_ids)):
@@ -639,7 +665,7 @@ class NuscDataset(torch.utils.data.Dataset):
         tracks = v_tracks
         n_tracks = len(tracks['bbox_2d'])
         print('Saving imgnm to objid to obj info of vehicles in nuScenes')
-        for i in range(n_tracks):
+        for i in tqdm(range(n_tracks)):
             ins_id = str(tracks['ins_id'][i][0])
             sam_ids = tracks['sam_id'][i]
             for j in range(len(sam_ids)):
@@ -674,7 +700,7 @@ class NuscDataset(torch.utils.data.Dataset):
             neighbor_cls = []
             print('Getting neighbor sequences')
             for i in tqdm(range(n_sample)):
-                target_oid = samples['obs']['ins_id'][i][0]  # str
+                target_oid = str(samples['obs']['ins_id'][i][0])  # str
                 target_bbox_seq = np.array(samples['obs']['bbox_2d'][i])  # T, 4
                 obslen = len(target_bbox_seq)
                 bbox_seq_dict = {'ped':{},
@@ -682,31 +708,37 @@ class NuscDataset(torch.utils.data.Dataset):
                 for j in range(obslen):
                     imgnm = str(samples['obs']['sam_id'][i][j])  # str
                     cur_ped_ids = set(self.imgnm_to_objid[imgnm]['ped'].keys())
-                    cur_ped_ids.remove(target_oid)
+                    try:
+                        cur_ped_ids.remove(target_oid)
+                    except:
+                        print(cur_ped_ids, target_oid, imgnm, self.dataset_name)
+                        import pdb; pdb.set_trace()
+                        raise ValueError()
                     cur_veh_ids = set(self.imgnm_to_objid[imgnm]['veh'].keys())
                     # ped neighbor for cur sample
                     # existing neighbor
-                    for oid in set(bbox_seq_dict.keys())&cur_ped_ids:
+                    for oid in set(bbox_seq_dict['ped'].keys())&cur_ped_ids:
                         bbox = np.array(self.imgnm_to_objid[imgnm]['ped'][oid]['bbox_2d'])
                         bbox_seq_dict['ped'][oid].append(bbox)
                     # first appearing neighbor
-                    for oid in cur_ped_ids-set(bbox_seq_dict.keys()):
+                    for oid in cur_ped_ids-set(bbox_seq_dict['ped'].keys()):
                         bbox = np.array(self.imgnm_to_objid[imgnm]['ped'][oid]['bbox_2d'])
                         bbox_seq_dict['ped'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
                     # disappeared neighbor
-                    for oid in set(bbox_seq_dict.keys())-cur_ped_ids:
+                    for oid in set(bbox_seq_dict['ped'].keys())-cur_ped_ids:
                         bbox_seq_dict['ped'][oid].append(np.ones([4])*padding_val)
+                    
                     # veh neighbor for cur sample
                     # existing neighbor
-                    for oid in set(bbox_seq_dict.keys())&cur_veh_ids:
+                    for oid in set(bbox_seq_dict['veh'].keys())&cur_veh_ids:
                         bbox = np.array(self.imgnm_to_objid[imgnm]['veh'][oid]['bbox_2d'])
                         bbox_seq_dict['veh'][oid].append(bbox)
                     # first appearing neighbor
-                    for oid in cur_veh_ids-set(bbox_seq_dict.keys()):
+                    for oid in cur_veh_ids-set(bbox_seq_dict['veh'].keys()):
                         bbox = np.array(self.imgnm_to_objid[imgnm]['veh'][oid]['bbox_2d'])
                         bbox_seq_dict['veh'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
                     # disappeared neighbor
-                    for oid in set(bbox_seq_dict.keys())-cur_veh_ids:
+                    for oid in set(bbox_seq_dict['veh'].keys())-cur_veh_ids:
                         bbox_seq_dict['veh'][oid].append(np.ones([4])*padding_val)
                 cur_neighbor_bbox = []
                 cur_neighbor_oid = []
@@ -719,18 +751,28 @@ class NuscDataset(torch.utils.data.Dataset):
                     cur_neighbor_bbox.append(bbox_seq_dict['veh'][oid])  # T, 4
                     cur_neighbor_oid.append(int(oid))
                     cur_neighbor_cls.append(1)
-                cur_neighbor_bbox = np.array(cur_neighbor_bbox)  # K T 4
-                cur_neighbor_oid = np.array(cur_neighbor_oid)  # K,
-                cur_neighbor_cls = np.array(cur_neighbor_cls)  # K,
-                cur_relations = bbox2d_relation_multi_seq(target_bbox_seq,
-                                                        cur_neighbor_bbox,
-                                                        rela_func='log_bbox_reg')  # K T 4
+                if len(cur_neighbor_bbox) == 0:
+                    cur_neighbor_bbox = np.zeros([1, obslen, 4])
+                    cur_neighbor_oid = np.ones([1]) * (-1)
+                    cur_neighbor_cls = np.zeros([1])
+                else:
+                    cur_neighbor_bbox = np.array(cur_neighbor_bbox)  # K T 4
+                    cur_neighbor_oid = np.array(cur_neighbor_oid)  # K,
+                    cur_neighbor_cls = np.array(cur_neighbor_cls)  # K,
+                try:
+                    cur_relations = bbox2d_relation_multi_seq(target_bbox_seq,
+                                                            cur_neighbor_bbox,
+                                                            rela_func='log_bbox_reg')  # K T 4
+                except:
+                    print(cur_neighbor_bbox.shape)
+                    import pdb; pdb.set_trace()
+                    raise ValueError()
                 # concat cls label to relations
                 cur_relations = np.concatenate([cur_relations, 
-                                                np.reshape(cur_neighbor_cls, [-1,1,1])],
+                                                cur_neighbor_cls.reshape([-1, 1, 1]).repeat(obslen, axis=1)],
                                                 -1)
-                relations.append(cur_relations)  # K T 5
-                neighbor_bbox.append(cur_neighbor_bbox)  # K T 4
+                relations.append(cur_relations.transpose(1,0,2))  # K T 5 -> T K 5
+                neighbor_bbox.append(cur_neighbor_bbox.transpose(1,0,2))  # K T 4 -> T K 4
                 neighbor_oid.append(cur_neighbor_oid)  # K
                 neighbor_cls.append(cur_neighbor_cls)  # K
             neighbor_seq = {}
@@ -816,9 +858,9 @@ class NuscDataset(torch.utils.data.Dataset):
                     new_seq = []
                     for i in range(0, self._obs_len, self.seq_interval+1):
                         new_seq.append(ori_seq[i])
-                    new_k.append(new_seq)
+                    new_k.append(np.array(new_seq))
                     assert len(new_k[s]) == self.obs_len, (k, len(new_k), self.obs_len)
-                new_k = np.array(new_k)
+                # new_k = np.array(new_k)
                 self.samples['obs'][k] = new_k
         for k in self.samples['pred']:
             if len(self.samples['pred'][k][0]) == self._pred_len:
@@ -828,9 +870,9 @@ class NuscDataset(torch.utils.data.Dataset):
                     new_seq = []
                     for i in range(0, self._pred_len, self.seq_interval+1):
                         new_seq.append(ori_seq[i])
-                    new_k.append(new_seq)
+                    new_k.append(np.array(new_seq))
                     assert len(new_k[s]) == self.pred_len, (k, len(new_k), self.pred_len)
-                new_k = np.array(new_k)
+                # new_k = np.array(new_k)
                 self.samples['pred'][k] = new_k
     
 

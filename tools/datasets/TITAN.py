@@ -364,6 +364,7 @@ class TITAN_dataset(Dataset):
         else:
             annos, self.ids = self.add_cid()
             self.p_tracks, self.num_p_tracks = self.get_p_tracks(annos)
+            # import pdb; pdb.set_trace()
             self.v_tracks, self.num_v_tracks = self.get_v_tracks(annos)
             track_info = {
                 'ids': self.ids,
@@ -537,6 +538,7 @@ class TITAN_dataset(Dataset):
         obs_bbox = torch.tensor(self.samples['obs']['bbox_normed'][idx]).float()  # T 4
         obs_bbox_unnormed = torch.tensor(self.samples['obs']['bbox'][idx]).float()
         pred_bbox = torch.tensor(self.samples['pred']['bbox_normed'][idx]).float()
+        pred_bbox_unnormed = torch.tensor(self.samples['pred']['bbox'][idx]).float()
         obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float()[:, 0]  # [accel, ang_vel] 0 for accel only
         clip_id_int = torch.tensor(int(self.samples['obs']['clip_id'][idx][0]))  # str --> int
         ped_id_int = torch.tensor(int(float(self.samples['obs']['obj_id'][idx][0])))
@@ -544,10 +546,14 @@ class TITAN_dataset(Dataset):
 
         # squeeze the coords
         if '0-1' in self.traj_format:
-            obs_bbox[:, 0] /= 2704
-            obs_bbox[:, 2] /= 2704
-            obs_bbox[:, 1] /= 1520
-            obs_bbox[:, 3] /= 1520
+            obs_bbox[:, 0] /= self.img_size[1]
+            obs_bbox[:, 2] /= self.img_size[1]
+            obs_bbox[:, 1] /= self.img_size[0]
+            obs_bbox[:, 3] /= self.img_size[0]
+            pred_bbox[:, 0] /= self.img_size[1]
+            pred_bbox[:, 2] /= self.img_size[1]
+            pred_bbox[:, 1] /= self.img_size[0]
+            pred_bbox[:, 3] /= self.img_size[0]
         # act labels
         if self.multi_label_cross:
             target = torch.tensor(self.samples[self.obs_or_pred]\
@@ -577,6 +583,7 @@ class TITAN_dataset(Dataset):
                   'obs_ego': obs_ego,
                   'pred_act': target,
                   'pred_bboxes': pred_bbox,
+                  'pred_bboxes_unnormed': pred_bbox_unnormed,
                   'atomic_actions': atomic_action,
                   'simple_context': simple_context,
                   'complex_context': complex_context,  # (1,)
@@ -592,12 +599,13 @@ class TITAN_dataset(Dataset):
                   'obs_neighbor_oid': torch.zeros((1,)),
                   }
         if 'social' in self.modalities:
+            # import pdb;pdb.set_trace()
             relations, neighbor_bbox, neighbor_oid =\
-                  pad_neighbor([self.samples['obs']['neighbor_relations'][idx],
-                                self.samples['obs']['neighbor_bbox'][idx],
+                  pad_neighbor([np.array(self.samples['obs']['neighbor_relations'][idx]).transpose(1,0,2),
+                                np.array(self.samples['obs']['neighbor_bbox'][idx]).transpose(1,0,2),
                                 self.samples['obs']['neighbor_oid'][idx]],
                                 self.max_n_neighbor)
-            sample['obs_neighbor_relation'] = torch.tensor(relations).float()
+            sample['obs_neighbor_relation'] = torch.tensor(relations).float()  # K T 5
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
             sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid)
         if 'img' in self.modalities:
@@ -667,7 +675,7 @@ class TITAN_dataset(Dataset):
                     all_c_seg = torch.stack(all_c_seg, dim=-1)  # h w n_cls
                     all_c_seg = torch.argmax(all_c_seg, dim=-1, keepdim=True).permute(2, 0, 1)  # 1 h w
                     ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0)  # 4 h w
-                sample['obs_context'] = ctx_imgs  # shape [3, obs_len, H, W]
+                sample['obs_context'] = ctx_imgs  # [3, obs_len, H, W]
             elif self.ctx_format in \
                 ('seg_ori_local', 'seg_local'):
                 # load imgs
@@ -725,32 +733,52 @@ class TITAN_dataset(Dataset):
             if self.sklt_format == 'pseudo_heatmap':
                 cid = str(int(float(self.samples['obs']['clip_id'][idx][0])))
                 pid = str(int(float(self.samples['obs']['obj_id'][idx][0])))
-                heatmaps = []
+                obs_heatmaps = []
+                pred_heatmaps = []
                 for img_nm in self.samples['obs']['img_nm'][idx]:
                     heatmap_nm = img_nm.replace('.png', '.pkl')
                     heatmap_path = os.path.join(self.sk_p_heatmap_path, cid, pid, heatmap_nm)
                     with open(heatmap_path, 'rb') as f:
                         heatmap = pickle.load(f)
-                    heatmaps.append(heatmap)
-                heatmaps = np.stack(heatmaps, axis=0)  # T C H W
+                    obs_heatmaps.append(heatmap)
+                for img_nm in self.samples['pred']['img_nm'][idx]:
+                    heatmap_nm = img_nm.replace('.png', '.pkl')
+                    heatmap_path = os.path.join(self.sk_p_heatmap_path, cid, pid, heatmap_nm)
+                    with open(heatmap_path, 'rb') as f:
+                        heatmap = pickle.load(f)
+                    pred_heatmaps.append(heatmap)
+                obs_heatmaps = np.stack(obs_heatmaps, axis=0)  # T C H W
+                pred_heatmaps = np.stack(pred_heatmaps, axis=0)  # T C H W
                 # T C H W -> C T H W
-                obs_skeletons = torch.from_numpy(heatmaps).float().permute(1, 0, 2, 3)  # shape: (17, seq_len, 48, 48)
+                obs_skeletons = torch.from_numpy(obs_heatmaps).float().permute(1, 0, 2, 3)  # shape: (17, seq_len, 48, 48)
+                pred_skeletons = torch.from_numpy(pred_heatmaps).float().permute(1, 0, 2, 3)  # shape: (17, seq_len, 48, 48)
             elif 'coord' in self.sklt_format:
                 cid = str(int(float(self.samples['obs']['clip_id'][idx][0])))
                 pid = str(int(float(self.samples['obs']['obj_id'][idx][0])))
                 coords = []
+                pred_coords = []
                 for img_nm in self.samples['obs']['img_nm'][idx]:
                     coord_nm = img_nm.replace('.png', '.pkl')
                     coord_path = os.path.join(self.sk_coord_path, cid, pid, coord_nm)
                     with open(coord_path, 'rb') as f:
                         coord = pickle.load(f)  # nj, 3
                     coords.append(coord[:, :2])  # nj, 2
+                for img_nm in self.samples['pred']['img_nm'][idx]:
+                    coord_nm = img_nm.replace('.png', '.pkl')
+                    coord_path = os.path.join(self.sk_coord_path, cid, pid, coord_nm)
+                    with open(coord_path, 'rb') as f:
+                        coord = pickle.load(f)  # nj, 3
+                    pred_coords.append(coord[:, :2])  # nj, 2
                 coords = np.stack(coords, axis=0)  # T, nj, 2
+                pred_coords = np.stack(pred_coords, axis=0)  # T, nj, 2
                 try:
                     obs_skeletons = torch.from_numpy(coords).float().permute(2, 0, 1)  # shape: (2, T, nj)
+                    pred_skeletons = torch.from_numpy(pred_coords).float().permute(2, 0, 1)  # shape: (2, T, nj)
                     if '0-1' in self.sklt_format:
                         obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
                         obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
+                        pred_skeletons[0] = pred_skeletons[0] / self.img_size[0]
+                        pred_skeletons[1] = pred_skeletons[1] / self.img_size[1]
                 except:
                     print('coords shape',coords.shape)
                     import pdb;pdb.set_trace()
@@ -758,6 +786,7 @@ class TITAN_dataset(Dataset):
             else:
                 raise NotImplementedError(self.sklt_format)
             sample['obs_skeletons'] = obs_skeletons
+            sample['pred_skeletons'] = pred_skeletons
 
         # augmentation
         if self.augment_mode != 'none':
@@ -1147,7 +1176,6 @@ class TITAN_dataset(Dataset):
                     imgnm_to_oid_to_info[cid][imgnm]['veh'] = {}
                 # initialize the dict of the obj
                 bbox = p_tracks['bbox'][i][j]
-                ego_motion = p_tracks['ego_motion'][i][j]
                 imgnm_to_oid_to_info[cid][imgnm]['ped'][oid] = {}
                 imgnm_to_oid_to_info[cid][imgnm]['ped'][oid]['bbox'] = bbox
         print('Vehicle')
@@ -1173,13 +1201,6 @@ class TITAN_dataset(Dataset):
             pickle.dump(imgnm_to_oid_to_info, f)
         
         return imgnm_to_oid_to_info
-
-    def _get_neighbors(self, sample):
-        '''
-        Get the neighbors' info of the target pedestrian during 
-        the observation length
-        '''
-        pass
 
     def filter_short_tracks(self, tracks, min_len):
         '''
@@ -1219,7 +1240,7 @@ class TITAN_dataset(Dataset):
                       samples,
                       save_path,
                       padding_val=0):
-        if os.path.exists(save_path):
+        if os.path.exists(save_path) and False:
             with open(save_path, 'rb') as f:
                 neighbor_seq = pickle.load(f)
         else:
@@ -1243,32 +1264,37 @@ class TITAN_dataset(Dataset):
                     cur_veh_ids = set(self.imgnm_to_objid[target_cid][imgnm]['veh'].keys())
                     # ped neighbor for cur sample
                     # existing neighbor
-                    for oid in set(bbox_seq_dict.keys())&cur_ped_ids:
+                    for oid in set(bbox_seq_dict['ped'].keys())&cur_ped_ids:
                         bbox = np.array(self.imgnm_to_objid[target_cid][imgnm]['ped'][oid]['bbox'])
                         bbox_seq_dict['ped'][oid].append(bbox)
                     # first appearing neighbor
-                    for oid in cur_ped_ids-set(bbox_seq_dict.keys()):
+                    for oid in cur_ped_ids-set(bbox_seq_dict['ped'].keys()):
                         bbox = np.array(self.imgnm_to_objid[target_cid][imgnm]['ped'][oid]['bbox'])
                         bbox_seq_dict['ped'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
                     # disappeared neighbor
-                    for oid in set(bbox_seq_dict.keys())-cur_ped_ids:
+                    for oid in set(bbox_seq_dict['ped'].keys())-cur_ped_ids:
                         bbox_seq_dict['ped'][oid].append(np.ones([4])*padding_val)
+                    
                     # veh neighbor for cur sample
                     # existing neighbor
-                    for oid in set(bbox_seq_dict.keys())&cur_veh_ids:
+                    for oid in set(bbox_seq_dict['veh'].keys())&cur_veh_ids:
                         bbox = np.array(self.imgnm_to_objid[target_cid][imgnm]['veh'][oid]['bbox'])
                         bbox_seq_dict['veh'][oid].append(bbox)
                     # first appearing neighbor
-                    for oid in cur_veh_ids-set(bbox_seq_dict.keys()):
+                    for oid in cur_veh_ids-set(bbox_seq_dict['veh'].keys()):
                         bbox = np.array(self.imgnm_to_objid[target_cid][imgnm]['veh'][oid]['bbox'])
                         bbox_seq_dict['veh'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
                     # disappeared neighbor
-                    for oid in set(bbox_seq_dict.keys())-cur_veh_ids:
+                    for oid in set(bbox_seq_dict['veh'].keys())-cur_veh_ids:
                         bbox_seq_dict['veh'][oid].append(np.ones([4])*padding_val)
                 cur_neighbor_bbox = []
                 cur_neighbor_oid = []
                 cur_neighbor_cls = []
                 for oid in bbox_seq_dict['ped']:
+                    # import pdb;pdb.set_trace()
+                    if oid == target_oid:
+                        import pdb;pdb.set_trace()
+                        raise ValueError()
                     cur_neighbor_bbox.append(bbox_seq_dict['ped'][oid])  # T, 4
                     cur_neighbor_oid.append(int(oid))
                     cur_neighbor_cls.append(0)
@@ -1276,18 +1302,24 @@ class TITAN_dataset(Dataset):
                     cur_neighbor_bbox.append(bbox_seq_dict['veh'][oid])  # T, 4
                     cur_neighbor_oid.append(int(oid))
                     cur_neighbor_cls.append(1)
-                cur_neighbor_bbox = np.array(cur_neighbor_bbox)  # K T 4
-                cur_neighbor_oid = np.array(cur_neighbor_oid)  # K,
-                cur_neighbor_cls = np.array(cur_neighbor_cls)  # K,
+                if len(cur_neighbor_bbox) == 0:
+                    cur_neighbor_bbox = np.zeros([1, obslen, 4])
+                    cur_neighbor_oid = np.ones([1]) * (-1)
+                    cur_neighbor_cls = np.zeros([1])
+                else:
+                    cur_neighbor_bbox = np.array(cur_neighbor_bbox)  # K T 4
+                    cur_neighbor_oid = np.array(cur_neighbor_oid)  # K,
+                    cur_neighbor_cls = np.array(cur_neighbor_cls)  # K,
                 cur_relations = bbox2d_relation_multi_seq(target_bbox_seq,
                                                         cur_neighbor_bbox,
                                                         rela_func='log_bbox_reg')  # K T 4
                 # concat cls label to relations
                 cur_relations = np.concatenate([cur_relations, 
-                                                np.reshape(cur_neighbor_cls, [-1,1,1])],
+                                                cur_neighbor_cls.reshape([-1, 1, 1]).repeat(obslen, axis=1)],
                                                 -1)
-                relations.append(cur_relations)  # K T 5
-                neighbor_bbox.append(cur_neighbor_bbox)  # K T 4
+                relations.append(cur_relations.transpose(1,0,2))  # K T 5 -> T K 5
+                neighbor_bbox.append(cur_neighbor_bbox.transpose(1,0,2))  # K T 4 -> T K 4
+                
                 neighbor_oid.append(cur_neighbor_oid)  # K
                 neighbor_cls.append(cur_neighbor_cls)  # K
             neighbor_seq = {}
@@ -1295,11 +1327,14 @@ class TITAN_dataset(Dataset):
             neighbor_seq['neighbor_bbox'] = neighbor_bbox
             neighbor_seq['neighbor_oid'] = neighbor_oid
             neighbor_seq['neighbor_cls'] = neighbor_cls
+            # import pdb;pdb.set_trace()
             with open(save_path, 'wb') as f:
                 pickle.dump(neighbor_seq, f)
         # add neighbor info to samples
         for k in neighbor_seq:
             samples['obs'][k] = neighbor_seq[k]
+            # print(f'num of {k}: {len(neighbor_seq[k])}')
+        # print(len(samples['obs']['obj_id']))
         return samples
     
     def str2ndarray(self, anno_list):
@@ -1328,6 +1363,8 @@ class TITAN_dataset(Dataset):
 
     def downsample_seq(self):
         for k in self.samples['obs']:
+            # if 'neighbor' in k:
+            #     import pdb;pdb.set_trace()
             if len(self.samples['obs'][k][0]) == self._obs_len:
                 new_k = []
                 for s in range(len(self.samples['obs'][k])):
@@ -1335,9 +1372,9 @@ class TITAN_dataset(Dataset):
                     new_seq = []
                     for i in range(0, self._obs_len, self.seq_interval+1):
                         new_seq.append(ori_seq[i])
-                    new_k.append(new_seq)
+                    new_k.append(np.array(new_seq))
                     assert len(new_k[s]) == self.obs_len, (k, len(new_k), self.obs_len)
-                new_k = np.array(new_k)
+                # new_k = np.array(new_k)
                 self.samples['obs'][k] = new_k
         for k in self.samples['pred']:
             if len(self.samples['pred'][k][0]) == self._pred_len:
@@ -1347,9 +1384,9 @@ class TITAN_dataset(Dataset):
                     new_seq = []
                     for i in range(0, self._pred_len, self.seq_interval+1):
                         new_seq.append(ori_seq[i])
-                    new_k.append(new_seq)
+                    new_k.append(np.array(new_seq))
                     assert len(new_k[s]) == self.pred_len, (k, len(new_k), self.pred_len)
-                new_k = np.array(new_k)
+                # new_k = np.array(new_k)
                 self.samples['pred'][k] = new_k
 
 def check_labels():

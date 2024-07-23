@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
+import os
+from config import cktp_root
 
 
 __all__ = [
@@ -114,7 +116,7 @@ def vgg16_backbone(pretrained=True, **kwargs):
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    path = '../work_dirs/models/vgg16-397923af.pth'
+    path = os.path.join(cktp_root, 'vgg16-397923af.pth')
     if pretrained:
         kwargs['init_weights'] = False
     model = VGG_backbone(make_layers(cfg['D']), **kwargs)

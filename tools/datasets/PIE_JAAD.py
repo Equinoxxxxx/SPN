@@ -77,11 +77,11 @@ class PIEDataset(Dataset):
         self.pred_len = pred_len
         self.overlap_ratio = overlap_ratio
         self.bbox_size = bbox_size
-        self.obs_interval = self.fps // obs_fps - 1
+        self.seq_interval = self.fps // obs_fps - 1
 
         # interval
-        self._obs_len = self.obs_len * (self.obs_interval + 1)
-        self._pred_len = self.pred_len * (self.obs_interval + 1)
+        self._obs_len = self.obs_len * (self.seq_interval + 1)
+        self._pred_len = self.pred_len * (self.seq_interval + 1)
 
         self.crop_from_ori = crop_from_ori
         self.resize_mode = resize_mode
@@ -121,9 +121,9 @@ class PIEDataset(Dataset):
                          'data_split_type': data_split_type,  
                          # crossing , intention
                          'seq_type': seq_type,  
-                         'min_track_size': self._obs_len + self._pred_len,  # discard tracks that are shorter
-                         'max_size_observe': self._obs_len,  # number of observation frames
-                         'max_size_predict': self._pred_len,  # number of prediction frames
+                         'min_track_size': 1,  # discard tracks that are shorter
+                         'max_size_observe': 1,  # number of observation frames
+                         'max_size_predict': 1,  # number of prediction frames
                          'seq_overlap_rate': overlap_ratio,  # how much consecutive sequences overlap
                          'balance': do_balance,  # balance the training and testing samples
                          'crop_type': 'context',  # crop 2x size of bbox around the pedestrian
@@ -153,7 +153,7 @@ class PIEDataset(Dataset):
             with HiddenPrints():
                 data_base = JAAD(data_path=self.root_path)
         self.extra_root = self.root_path
-        self.sk_vis_path = os.path.join(self.root_path, '/sk_vis/even_padded/288w_by_384h/')
+        self.sk_vis_path = os.path.join(self.root_path, 'sk_vis/even_padded/288w_by_384h/')
         self.sk_coord_path = os.path.join(self.root_path, 'sk_coords/even_padded/288w_by_384h/')
         self.sk_heatmap_path = os.path.join(self.root_path, 'sk_heatmaps/even_padded/288w_by_384h/')
         self.sk_p_heatmap_path = os.path.join(self.root_path, 'sk_pseudo_heatmaps/even_padded/48w_by_48h/')
@@ -210,8 +210,16 @@ class PIEDataset(Dataset):
             else:
                 with open(self.imgnm_to_objid_path, 'rb') as f:
                     self.imgnm_to_objid = pickle.load(f)
-
-        pids = [track[0][0] for track in self.p_tracks['ped_id']]
+        pids = []
+        for i in range(len(self.p_tracks['ped_id'])):
+            track = self.p_tracks['ped_id'][i]
+            if len(track) == 0:
+                continue
+            try:
+                pids.append(track[0][0])
+            except:
+                import pdb;pdb.set_trace()
+                raise ValueError()
 
         self.samples = self.split_to_samples(self.p_tracks)
         print('-----------Convert samples to ndarray----------')
@@ -232,7 +240,7 @@ class PIEDataset(Dataset):
             self.samples = self.rm_occluded(self.samples, max_occ)
 
         # apply interval
-        if self.obs_interval > 0:
+        if self.seq_interval > 0:
             self.downsample_seq()
             print('Applied interval')
             print('cur input len', len(self.samples['obs_img_nm_int'][0]))
@@ -308,9 +316,10 @@ class PIEDataset(Dataset):
     def __getitem__(self, idx):
         # print('-----------getting item-----------')
         # import pdb; pdb.set_trace()
-        obs_bboxes = torch.tensor(self.samples['obs_bbox_normed'][idx]).float()  # ltrb
+        obs_bbox = torch.tensor(self.samples['obs_bbox_normed'][idx]).float()  # ltrb
         obs_bboxes_unnormed = torch.tensor(self.samples['obs_bbox'][idx]).float()  # ltrb
-        pred_bboxes = torch.tensor(self.samples['pred_bbox_normed'][idx]).float()
+        pred_bbox = torch.tensor(self.samples['pred_bbox_normed'][idx]).float()
+        pred_bboxes_unnormed = torch.tensor(self.samples['pred_bbox'][idx]).float()
         target = torch.tensor(self.samples['target'][idx][-1])
         obs_ego = \
             torch.tensor(self.samples['obs_ego'][idx]).float().reshape(-1)
@@ -320,21 +329,26 @@ class PIEDataset(Dataset):
 
         # normalize the coordinates
         if '0-1' in self.traj_format:
-            obs_bboxes[:, 0] /= 1920
-            obs_bboxes[:, 2] /= 1920
-            obs_bboxes[:, 1] /= 1080
-            obs_bboxes[:, 3] /= 1080
+            obs_bbox[:, 0] /= self.img_size[1]
+            obs_bbox[:, 2] /= self.img_size[1]
+            obs_bbox[:, 1] /= self.img_size[0]
+            obs_bbox[:, 3] /= self.img_size[0]
+            pred_bbox[:, 0] /= self.img_size[1]
+            pred_bbox[:, 2] /= self.img_size[1]
+            pred_bbox[:, 1] /= self.img_size[0]
+            pred_bbox[:, 3] /= self.img_size[0]
 
         sample = {'dataset_name': torch.tensor(DATASET2ID[self.dataset_name]),
                 'set_id_int': torch.tensor(set_id_int),  # obs_len,
                 'vid_id_int': torch.tensor(self.samples['obs_vid_id_int'][idx][-1]),  # int
                 'ped_id_int': torch.tensor(self.samples['obs_ped_id_int'][idx][-1]),  # int out of (set id, vid id, ped id)
                 'img_nm_int': torch.tensor(self.samples['obs_img_nm_int'][idx]),  # obs_len,
-                'obs_bboxes':obs_bboxes, # obslen, 4
+                'obs_bboxes':obs_bbox, # obslen, 4
                 'obs_bboxes_unnormed': obs_bboxes_unnormed,
                 'obs_ego': obs_ego,  # shape: obs len, 1
                 'pred_act': target,   # int
-                'pred_bboxes': pred_bboxes,   # shape: [pred_len, 4]
+                'pred_bboxes': pred_bbox,   # shape: [pred_len, 4]
+                'pred_bboxes_unnormed': pred_bboxes_unnormed,
                 'atomic_actions': torch.tensor(0),
                 'simple_context': torch.tensor(0),
                 'complex_context': torch.tensor(0),  # (1,)
@@ -349,12 +363,11 @@ class PIEDataset(Dataset):
                 'obs_neighbor_bbox': torch.zeros((1, self.obs_len, 4)),
                 'obs_neighbor_oid': torch.zeros((1,)),
                 }
-        # if self.dataset_name == 'PIE':
-        #     sample['set_id_int'] = self.samples['obs_set_id_int'][idx]
+
         if 'social' in self.modalities:
             relations, neighbor_bbox, neighbor_oid =\
-                  pad_neighbor([self.samples['obs_neighbor_relations'][idx],
-                                self.samples['obs_neighbor_bbox'][idx],
+                  pad_neighbor([np.array(self.samples['obs_neighbor_relations'][idx]).transpose(1,0,2),
+                                np.array(self.samples['obs_neighbor_bbox'][idx]).transpose(1,0,2),
                                 self.samples['obs_neighbor_oid'][idx]],
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()
@@ -373,12 +386,25 @@ class PIEDataset(Dataset):
                         coord = pickle.load(f)  # 17, 3
                     coords.append(coord[:, :2])  # 17, 2
                 coords = np.stack(coords, axis=0)  # T 17, 2
+                pred_coords = []
+                ori_pred_img_paths = self.samples['pred_image_paths'][idx]
+                for path in ori_pred_img_paths:
+                    img_nm = path.split('/')[-1]
+                    coord_nm = img_nm.replace('.png', '.pkl')
+                    coord_path = os.path.join(self.sk_coord_path, pid, coord_nm)
+                    with open(coord_path, 'rb') as f:
+                        coord = pickle.load(f)  # 17, 3
+                    pred_coords.append(coord[:, :2])  # 17, 2
+                pred_coords = np.stack(pred_coords, axis=0)  # T 17, 2
                 # (T, N, C) -> (C, T, N)
                 try:
                     obs_skeletons = torch.from_numpy(coords).float().permute(2, 0, 1)  # 2, T, 17
+                    pred_skeletons = torch.from_numpy(pred_coords).float().permute(2, 0, 1)
                     if '0-1' in self.sklt_format:
                         obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
                         obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
+                        pred_skeletons[0] = pred_skeletons[0] / self.img_size[0]
+                        pred_skeletons[1] = pred_skeletons[1] / self.img_size[1]
                 except:
                     print('coords shape',coords.shape)
                     import pdb;pdb.set_trace()
@@ -397,6 +423,18 @@ class PIEDataset(Dataset):
                 heatmaps = np.stack(heatmaps, axis=0)  # T C H W
                 # T C H W -> C T H W
                 obs_skeletons = torch.from_numpy(heatmaps).float().permute(1, 0, 2, 3)  # shape: (17, seq_len, 96, 72)
+                pred_heatmaps = []
+                ori_pred_img_paths = self.samples['pred_image_paths'][idx]
+                for path in ori_pred_img_paths:
+                    img_nm = path.split('/')[-1]
+                    heatmap_nm = img_nm.replace('.png', '.pkl')
+                    heatmap_path = os.path.join(self.sk_heatmap_path, pid, heatmap_nm)
+                    with open(heatmap_path, 'rb') as f:
+                        heatmap = pickle.load(f)
+                    pred_heatmaps.append(heatmap)
+                pred_heatmaps = np.stack(pred_heatmaps, axis=0)  # T C H W
+                # T C H W -> C T H W
+                pred_skeletons = torch.from_numpy(pred_heatmaps).float().permute(1, 0, 2, 3)
             elif self.sklt_format == 'pseudo_heatmap':
                 pid = self.samples['obs_pid'][idx][0][0]
                 heatmaps = []
@@ -411,7 +449,20 @@ class PIEDataset(Dataset):
                 heatmaps = np.stack(heatmaps, axis=0)  # T C H W
                 # T C H W -> C T H W
                 obs_skeletons = torch.from_numpy(heatmaps).float().permute(1, 0, 2, 3)  # shape: (17, seq_len, 48, 48)
+                pred_heatmaps = []
+                ori_pred_img_paths = self.samples['pred_image_paths'][idx]
+                for path in ori_pred_img_paths:
+                    img_nm = path.split('/')[-1]
+                    heatmap_nm = img_nm.replace('.png', '.pkl')
+                    heatmap_path = os.path.join(self.sk_p_heatmap_path, pid, heatmap_nm)
+                    with open(heatmap_path, 'rb') as f:
+                        heatmap = pickle.load(f)
+                    pred_heatmaps.append(heatmap)
+                pred_heatmaps = np.stack(pred_heatmaps, axis=0)  # T C H W
+                # T C H W -> C T H W
+                pred_skeletons = torch.from_numpy(pred_heatmaps).float().permute(1, 0, 2, 3)
             elif self.sklt_format == 'img+heatmap':
+                raise NotImplementedError()
                 if not self.crop_from_ori:
                     pid = self.samples['obs_pid'][idx][0][0]
                     imgs = []
@@ -422,9 +473,9 @@ class PIEDataset(Dataset):
                         imgs.append(cv2.imread(img_path))
                 else:
                     obs_img_paths = self.samples['obs_image_paths'][idx]
-                    obs_bboxes = self.samples['obs_bbox'][idx]
+                    obs_bbox = self.samples['obs_bbox'][idx]
                     imgs = []
-                    for path, bbox in zip(obs_img_paths, obs_bboxes):
+                    for path, bbox in zip(obs_img_paths, obs_bbox):
                         imgs.append(self.load_cropped_image(path, bbox))
                 # (T, H, W, C) -> (C, T, H, W)
                 imgs = np.stack(imgs, axis=0)
@@ -458,18 +509,18 @@ class PIEDataset(Dataset):
                 heatmaps = F.interpolate(heatmaps, size=(ped_imgs.size(2),
                                                          ped_imgs.size(3)), mode='bilinear', align_corners=True)  # 1 T H W
                 obs_skeletons = heatmaps * ped_imgs
-
             else:
                 raise NotImplementedError(self.sklt_format)
             sample['obs_skeletons'] = obs_skeletons
+            sample['pred_skeletons'] = pred_skeletons
         
         if 'img' in self.modalities:
             # print('-----------getting img-----------')
             if self.crop_from_ori:
                 obs_img_paths = self.samples['obs_image_paths'][idx]
-                obs_bboxes = self.samples['obs_bbox'][idx]
+                obs_bbox = self.samples['obs_bbox'][idx]
                 imgs = []
-                for path, bbox in zip(obs_img_paths, obs_bboxes):
+                for path, bbox in zip(obs_img_paths, obs_bbox):
                     imgs.append(self.load_cropped_image(path, bbox))
             else:
                 pid = self.samples['obs_pid'][idx][0][0]
@@ -613,9 +664,6 @@ class PIEDataset(Dataset):
                     sample['obs_context'] = all_seg * torch.unsqueeze(crop_imgs, dim=-1)  # 3Thw n_cls
             else:
                 raise ValueError(self.ctx_format)
-        
-        if 'interaction' in self.modalities:
-            pass
         
         if self.pred_context:
             if self.pred_context_mode == 'ori':
@@ -800,11 +848,14 @@ class PIEDataset(Dataset):
                     (len(new_tracks[k][i]), len(new_tracks['ego_accel'][i]))
         return new_tracks
 
+    def _get_v_tracks(self):
+        pass
+
     def get_neighbor_relation(self,
                       samples,
                       save_path,
                       padding_val=0):
-        if os.path.exists(save_path):
+        if os.path.exists(save_path) and False:
             with open(save_path, 'rb') as f:
                 neighbor_seq = pickle.load(f)
         else:
@@ -816,7 +867,7 @@ class PIEDataset(Dataset):
             print('Getting neighbor sequences')
             for i in tqdm(range(n_sample)):
                 target_cid = str(samples['obs_vid_id_int'][i][0])  # str
-                target_oid = str(samples['obs_ped_id_int'][i][0])  # str
+                target_oid = str(samples['obs_ped_id_int'][i][-1])  # str (sid vid oid)
                 if self.dataset_name == 'PIE':
                     target_sid = str(samples['obs_set_id_int'][i][0])  # str
                     vid_dict = self.imgnm_to_objid[target_sid][target_cid]
@@ -827,33 +878,39 @@ class PIEDataset(Dataset):
                 bbox_seq_dict = {'ped':{},
                                 'veh':{}}
                 for j in range(obslen):
-                    imgnm = samples['obs']['img_nm'][i][j]  # str
+                    imgnm = samples['obs_image_paths'][i][j].split('/')[-1]  # str
                     cur_ped_ids = set(vid_dict[imgnm]['ped'].keys())
-                    cur_ped_ids.remove(target_oid)
+                    try:
+                        cur_ped_ids.remove(target_oid)
+                    except:
+                        # print(cur_ped_ids, target_oid, target_sid, target_cid, imgnm, self.dataset_name)
+                        import pdb; pdb.set_trace()
+                        raise ValueError()
                     cur_veh_ids = set(vid_dict[imgnm]['veh'].keys())
                     # ped neighbor for cur sample
                     # existing neighbor
-                    for oid in set(bbox_seq_dict.keys())&cur_ped_ids:
+                    for oid in set(bbox_seq_dict['ped'].keys())&cur_ped_ids:
                         bbox = np.array(vid_dict[imgnm]['ped'][oid]['bbox'])
                         bbox_seq_dict['ped'][oid].append(bbox)
                     # first appearing neighbor
-                    for oid in cur_ped_ids-set(bbox_seq_dict.keys()):
+                    for oid in cur_ped_ids-set(bbox_seq_dict['ped'].keys()):
                         bbox = np.array(vid_dict[imgnm]['ped'][oid]['bbox'])
                         bbox_seq_dict['ped'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
                     # disappeared neighbor
-                    for oid in set(bbox_seq_dict.keys())-cur_ped_ids:
+                    for oid in set(bbox_seq_dict['ped'].keys())-cur_ped_ids:
                         bbox_seq_dict['ped'][oid].append(np.ones([4])*padding_val)
+                    
                     # veh neighbor for cur sample
                     # existing neighbor
-                    for oid in set(bbox_seq_dict.keys())&cur_veh_ids:
+                    for oid in set(bbox_seq_dict['veh'].keys())&cur_veh_ids:
                         bbox = np.array(vid_dict[imgnm]['veh'][oid]['bbox'])
                         bbox_seq_dict['veh'][oid].append(bbox)
                     # first appearing neighbor
-                    for oid in cur_veh_ids-set(bbox_seq_dict.keys()):
+                    for oid in cur_veh_ids-set(bbox_seq_dict['veh'].keys()):
                         bbox = np.array(vid_dict[imgnm]['veh'][oid]['bbox'])
                         bbox_seq_dict['veh'][oid] = [np.ones([4])*padding_val]*j + [bbox]  # T, 4
                     # disappeared neighbor
-                    for oid in set(bbox_seq_dict.keys())-cur_veh_ids:
+                    for oid in set(bbox_seq_dict['veh'].keys())-cur_veh_ids:
                         bbox_seq_dict['veh'][oid].append(np.ones([4])*padding_val)
                 cur_neighbor_bbox = []
                 cur_neighbor_oid = []
@@ -866,18 +923,23 @@ class PIEDataset(Dataset):
                     cur_neighbor_bbox.append(bbox_seq_dict['veh'][oid])  # T, 4
                     cur_neighbor_oid.append(int(oid))
                     cur_neighbor_cls.append(1)
-                cur_neighbor_bbox = np.array(cur_neighbor_bbox)  # K T 4
-                cur_neighbor_oid = np.array(cur_neighbor_oid)  # K,
-                cur_neighbor_cls = np.array(cur_neighbor_cls)  # K,
+                if len(cur_neighbor_bbox) == 0:
+                    cur_neighbor_bbox = np.zeros([1, obslen, 4])
+                    cur_neighbor_oid = np.ones([1]) * (-1)
+                    cur_neighbor_cls = np.zeros([1])
+                else:
+                    cur_neighbor_bbox = np.array(cur_neighbor_bbox)  # K T 4
+                    cur_neighbor_oid = np.array(cur_neighbor_oid)  # K,
+                    cur_neighbor_cls = np.array(cur_neighbor_cls)  # K,
                 cur_relations = bbox2d_relation_multi_seq(target_bbox_seq,
                                                         cur_neighbor_bbox,
                                                         rela_func='log_bbox_reg')  # K T 4
                 # concat cls label to relations
                 cur_relations = np.concatenate([cur_relations, 
-                                                np.reshape(cur_neighbor_cls, [-1,1,1])],
+                                                cur_neighbor_cls.reshape([-1, 1, 1]).repeat(obslen, axis=1)],
                                                 -1)
-                relations.append(cur_relations)  # K T 5
-                neighbor_bbox.append(cur_neighbor_bbox)  # K T 4
+                relations.append(cur_relations.transpose(1,0,2))  # K T 5 -> T K 5
+                neighbor_bbox.append(cur_neighbor_bbox.transpose(1,0,2))  # K T 4 -> T K 4
                 neighbor_oid.append(cur_neighbor_oid)  # K
                 neighbor_cls.append(cur_neighbor_cls)  # K
             neighbor_seq = {}
@@ -1138,26 +1200,29 @@ class PIEDataset(Dataset):
         new_samples = {}
         for k in self.samples:
             if 'obs' in k and len(self.samples[k][0]) == self._obs_len:
+
                 new_samples[k] = []
                 for s in range(len(self.samples[k])):
                     ori_seq = self.samples[k][s]
                     new_seq = []
-                    for i in range(0, self._obs_len, self.obs_interval+1):
+                    for i in range(0, self._obs_len, self.seq_interval+1):
                         new_seq.append(ori_seq[i])
-                    new_samples[k].append(new_seq)
+                    new_samples[k].append(np.array(new_seq))
                     assert len(new_samples[k][s]) == self.obs_len, (k, len(new_samples[k]), self.obs_len)
-                new_samples[k] = np.array(new_samples[k])
+                if 'neighbor' not in k:
+                    new_samples[k] = np.array(new_samples[k])
 
             if 'pred' in k and len(self.samples[k][0]) == self._pred_len:
                 new_samples[k] = []
                 for s in range(len(self.samples[k])):
                     ori_seq = self.samples[k][s]
                     new_seq = []
-                    for i in range(0, self._pred_len, self.obs_interval+1):
+                    for i in range(0, self._pred_len, self.seq_interval+1):
                         new_seq.append(ori_seq[i])
-                    new_samples[k].append(new_seq)
+                    new_samples[k].append(np.array(new_seq))
                     assert len(new_samples[k][s]) == self.pred_len, (k, len(new_samples[k]), self.pred_len)
-                new_samples[k] = np.array(new_samples[k])
+                if 'neighbor' not in k:
+                    new_samples[k] = np.array(new_samples[k])
         for k in new_samples:
             # print('new k', k)
             # print(new_samples[k].shape)
