@@ -101,11 +101,11 @@ def build_feature_extractor(args):
 def traj2target(obs_bbox: torch.Tensor, 
                pred_bbox: torch.Tensor):
     '''
-    obs_bbox: torch.Tensor B,obslen,4
-    pred_bbox: torch.Tensor B,predlen,4
+    obs_bbox: torch.Tensor B,obslen,...
+    pred_bbox: torch.Tensor B,predlen,...
 
     return
-        target torch.Tensor B,obslen,predlen,4
+        target torch.Tensor B,obslen,predlen,...
     '''
     batch_size = obs_bbox.size(0)
     obslen = obs_bbox.size(1)
@@ -254,11 +254,17 @@ class SGNet(nn.Module):
         return all_goal_traj, all_dec_traj
             
 
-    def forward(self, inputs, start_index = 0):
-        traj_inputs = inputs['traj']  # B T 4
+    def forward(self, batch, start_index = 0):
+        traj_inputs = batch['traj']  # B T 4
         if self.dataset in ['JAAD','PIE']:
             traj_feat = self.feature_extractor(traj_inputs)
             all_goal_traj, all_dec_traj = self.encoder(traj_feat)
+            traj_pred = accumulate_traj(traj_inputs, all_dec_traj)
+            out = {
+                'pred_traj': traj_pred,  # B T 4
+                'ori_output': (all_goal_traj, all_dec_traj)  # B obelen predlen 4
+            }
+            return out
             return all_goal_traj, all_dec_traj
         elif self.dataset in ['ETH', 'HOTEL','UNIV','ZARA1', 'ZARA2']:
             traj_input_temp = self.feature_extractor(traj_inputs[:,start_index:,:])
@@ -268,11 +274,41 @@ class SGNet(nn.Module):
             return all_goal_traj, all_dec_traj
 
 
+def accumulate_traj(obs_traj: torch.Tensor, 
+                    target: torch.Tensor):
+    '''
+    obs_traj: B obslen, ...
+    target: B obslen predlen, ...
+    '''
+    obs_traj = obs_traj.unsqueeze(2)  # B obslen 1 ...
+    target += obs_traj
+    return target[:, -1]  # B predlen ...
+
+def traj_to_sgnet_target(obs_traj: torch.Tensor, 
+                         pred_traj: torch.Tensor):
+    '''
+    obs_traj: B obslen, ...
+    pred_traj: B obslen, ...
+    '''
+    obslen = obs_traj.size(1)
+    predlen = obs_traj.size(1)
+    seq = torch.concat(obs_traj, pred_traj, dim=1)
+    target = []
+    for i in range(obslen):
+        target.append(
+            seq[:, i+1:i+1+predlen] - seq[:, i:i+1]
+        )
+    target = torch.stack(target, dim=1)  # B obslen predlen ...
+    return target
+
+
+
 if __name__ == '__main__':
     args = parse_sgnet_args()
     args.enc_steps = 4
-    args.dec_steps = 4
+    args.dec_steps = 8
     x = torch.rand((2, 4, 4))
+    batch = {'traj': x}
     model = SGNet(args)
-    all_goal_traj, all_dec_traj = model(x)
-    print(all_goal_traj.shape, all_dec_traj.shape)
+    out = model(batch)
+    print(out['traj_pred'].shape)

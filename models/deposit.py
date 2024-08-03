@@ -186,20 +186,26 @@ class ModelMain(nn.Module):
             imputed_samples[:, i] = (current_sample * (1 - cond_mask) + observed_data * cond_mask).detach()
         return imputed_samples
 
-    def forward(self, batch, is_train=1):
+    def forward(self, batch, n_samples, is_train=1):
+        '''
+        batch: (inputs, target)
+        '''
         (
             observed_data,
             observed_tp,
             gt_mask
         ) = self.process_data(batch)
-
         cond_mask = gt_mask  # B C T
-
         side_info = self.get_side_info(observed_tp, cond_mask)
-
         loss_func = self.calc_loss if is_train == 1 else self.calc_loss_valid
-
-        return loss_func(observed_data, cond_mask, side_info, is_train)
+        loss = loss_func(observed_data, cond_mask, side_info, is_train)
+        samples = None
+        # prediction
+        with torch.no_grad():
+            # B K nj*ndim T
+            samples = self.impute(observed_data, cond_mask, side_info, n_samples)
+        return {'loss': loss,
+                'pred_sklt': samples}
 
     def evaluate(self, batch, n_samples):
         (
@@ -217,7 +223,7 @@ class ModelMain(nn.Module):
             samples = self.impute(observed_data, cond_mask, side_info, n_samples)
         return samples, observed_data, target_mask, observed_tp
 
-    def process_data(self, batch):
+    def _process_data(self, batch):
         
         pose = batch["pose"].to(self.device).float()
         tp = batch["timepoints"].to(self.device).float()
@@ -231,3 +237,23 @@ class ModelMain(nn.Module):
             tp,
             mask
         )
+    
+    def process_data(self, batch):
+        inputs, targets = batch
+        input_pose = inputs['sklt']  # B 2 obslen nj
+        gt_pose = targets['pred_sklt']  # B 2 predlen nj
+        batch_size = input_pose.size(0)
+        n_dim = input_pose.size(1)
+        obslen = input_pose.size(2)
+        predlen = gt_pose.size(2)
+        nj = input_pose.size(3)
+        pose = torch.concat([input_pose, gt_pose], 2)  # B 2 obslen+predlen nj
+        pose = pose.permute(0,2,1,3).reshape(batch_size, obslen+predlen, -1)
+        mask = torch.zeros_like(pose).to(pose.device).float()  # B obslen+predlen 2*nj
+        mask[:, :obslen] = 1
+        tp = torch.arange(obslen+predlen).unsqueeze(0).repeat(batch_size,1).to(pose.device).float()
+        return {
+            pose,
+            tp,
+            mask
+        }

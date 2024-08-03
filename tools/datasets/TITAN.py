@@ -245,9 +245,7 @@ class TITAN_dataset(Dataset):
                  color_order='BGR', img_norm_mode='torch',
                  required_labels=['atomic_actions', 'simple_context'], 
                  multi_label_cross=0, 
-                 use_cross=1,
-                 use_atomic=0, use_complex=0, use_communicative=0, 
-                 use_transporting=0, use_age=0,
+                 act_sets=['cross'],
                  loss_weight='sklearn',
                  tte=None,
                  small_set=0,
@@ -294,12 +292,12 @@ class TITAN_dataset(Dataset):
         self.track_save_path = track_save_path
         self.required_labels = required_labels
         self.multi_label_cross = multi_label_cross
-        self.use_cross = use_cross
-        self.use_atomic = use_atomic
-        self.use_complex = use_complex
-        self.use_communicative = use_communicative
-        self.use_transporting = use_transporting
-        self.use_age = use_age
+        self.use_cross = 'cross' in act_sets
+        self.use_atomic = 'atomic' in act_sets
+        self.use_complex = 'complex' in act_sets
+        self.use_communicative = 'communicative' in act_sets
+        self.use_transporting = 'transporting' in act_sets
+        self.use_age = 'age' in act_sets
         self.loss_weight = loss_weight
         self.neighbor_mode = neighbor_mode
         self.tte = tte
@@ -630,8 +628,7 @@ class TITAN_dataset(Dataset):
                 ped_imgs = torch.flip(ped_imgs, dims=[0])
             sample['ped_imgs'] = ped_imgs
         if 'ctx' in self.modalities:
-            if self.ctx_format in ('local', 'ori_local', 'mask_ped', 'ori', 
-                                   'ped_graph'):
+            if self.ctx_format in ('local','ori_local','mask_ped','ori','ped_graph'):
                 ctx_imgs = []
                 for img_nm in self.samples['obs']['img_nm'][idx]:
                     img_path = os.path.join(self.ctx_root, 
@@ -675,7 +672,7 @@ class TITAN_dataset(Dataset):
                     all_c_seg = torch.stack(all_c_seg, dim=-1)  # h w n_cls
                     all_c_seg = torch.argmax(all_c_seg, dim=-1, keepdim=True).permute(2, 0, 1)  # 1 h w
                     ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0)  # 4 h w
-                sample['obs_context'] = ctx_imgs  # [3, obs_len, H, W]
+                sample['obs_context'] = ctx_imgs  # [c, obs_len, H, W]
             elif self.ctx_format in \
                 ('seg_ori_local', 'seg_local'):
                 # load imgs
@@ -723,11 +720,7 @@ class TITAN_dataset(Dataset):
                 for c in self.seg_cls:
                     all_seg.append(torch.stack(crop_segs[c], dim=1))  # 1Thw
                 all_seg = torch.stack(all_seg, dim=4)  # 1Thw n_cls
-                if self.ctx_format == 'ped_graph':
-                    all_seg = torch.argmax(all_seg[0, -1], dim=-1, keepdim=True).permute(2, 0, 1)  # 1 h w
-                    sample['obs_context'] = torch.concat([ctx_imgs[:, -1], all_seg], dim=0)  # 4 h w
-                else:
-                    sample['obs_context'] = all_seg * torch.unsqueeze(ctx_imgs, dim=-1)  # 3Thw n_cls
+                sample['obs_context'] = all_seg * torch.unsqueeze(ctx_imgs, dim=-1)  # 3 T h w n_cls
                 
         if 'sklt' in self.modalities:
             if self.sklt_format == 'pseudo_heatmap':

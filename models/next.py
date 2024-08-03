@@ -6,6 +6,8 @@ from tools.datasets.TITAN import KEY_2_N_CLS
 from .backbones import create_backbone
 
 
+
+
 def gather_nd(params, indices):
     """ The same as tf.gather_nd but batched gather is not supported yet.
     indices is an k-dimensional integer tensor, best thought of as a (k-1)-dimensional tensor of indices into params, where each element defines a slice of params:
@@ -390,6 +392,7 @@ class Next(nn.Module):
     
     def forward(self,
                 batch):
+        
         KP = 17
         N = batch[list(batch.keys())[0]].size(0)
 
@@ -401,7 +404,7 @@ class Next(nn.Module):
         enc_last_state_list = [traj_obs_enc_last_state]
 
         # encode appearance
-        appe = batch['ped_imgs']
+        appe = batch['img']
         B,C,T,H,W = appe.size()
         appe_emb = self.img_backbone(appe.permute(0,2,1,3,4).reshape(B*T,C,H,W))
         _, C1,H1,W1 = appe_emb.size()
@@ -411,15 +414,15 @@ class Next(nn.Module):
         enc_last_state_list.append(appe_last)
 
         # encode pose
-        # B 2 T nj --> B T 2nj
-        obs_kp = batch['obs_kp'].permute(0,2,3,1).reshape(B, T, self.kp_size * 2)
+        # B 2 T nj --> B T 2 nj
+        obs_kp = batch['sklt'].permute(0,2,3,1).reshape(B, T, self.kp_size * 2)
         obs_kp = self.kp_emb(obs_kp)
         kp_obs_enc_h, kp_obs_enc_last_state = self.enc_kp(obs_kp)
         enc_h_list.append(kp_obs_enc_h)
         enc_last_state_list.append(kp_obs_enc_last_state)
 
         # encode person scene
-        obs_personscene = batch['ctx'][:, -1] # B T H W
+        obs_personscene = batch['ctx'][:, -1] # B 4 T H W -> B T H W
         obs_personscene = F.one_hot(obs_personscene, self.n_seg)  # B T H W n_seg
         obs_personscene = obs_personscene.mean([1, 2,3])  # B H W n_seg
         obs_personscene = self.conv3(self.conv2(obs_personscene))  # B C
@@ -461,8 +464,9 @@ class Next(nn.Module):
         pred_length = self.pred_len
         traj_pred_out = self.decode(traj_obs_last, traj_obs_enc_last_state,
                                          obs_enc_h, pred_length, self.dec_cell_traj, scope='decoder')
-        out = {'traj_pred': traj_pred_out}
+        out = {'pred_traj': traj_pred_out,
+               'cls_logits': {}}
         for k in self.action_sets:
-            out[k] = self.future_act[k](obs_enc_last_state)
+            out['cls_logits'][k] = self.future_act[k](obs_enc_last_state)
         
         return out

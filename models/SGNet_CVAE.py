@@ -3,6 +3,7 @@ import torch.nn as nn
 from .SGNet import build_feature_extractor
 from .bitrap_np import BiTraPNP
 import torch.nn.functional as F
+from .SGNet import accumulate_traj
 
 class SGNet_CVAE(nn.Module):
     def __init__(self, args):
@@ -144,17 +145,36 @@ class SGNet_CVAE(nn.Module):
             all_cvae_dec_traj[:,enc_step,:,:,:] = self.cvae_decoder(cvae_dec_hidden, goal_for_dec)
         return all_goal_traj, all_cvae_dec_traj, total_KLD, total_probabilities
             
-    def forward(self, inputs, map_mask=None, targets = None, start_index = 0, training=True):
+    def forward(self, batch, training, map_mask=None, targets = None, start_index = 0):
+        traj_inputs = batch['traj']  # B T 4
         self.training = training
         if torch.is_tensor(start_index):
             start_index = start_index[0].item()
         if self.dataset in ['JAAD','PIE']:
-            traj_input = self.feature_extractor(inputs)
-            all_goal_traj, all_cvae_dec_traj, KLD, total_probabilities = self.encoder(inputs, targets, traj_input)
+            traj_input = self.feature_extractor(traj_inputs)
+            all_goal_traj, all_cvae_dec_traj, KLD, total_probabilities = self.encoder(traj_inputs, targets, traj_input)
+            traj_pred = accumulate_traj(traj_inputs, all_dec_traj)
+            out = {'pred_traj': traj_pred,  # B T K 4
+                   'ori_output': (all_goal_traj, all_cvae_dec_traj, KLD, total_probabilities)}
+            return out
             return all_goal_traj, all_cvae_dec_traj, KLD, total_probabilities
         elif self.dataset in ['ETH', 'HOTEL','UNIV','ZARA1', 'ZARA2']:
-            traj_input_temp = self.feature_extractor(inputs[:,start_index:,:])
-            traj_input = traj_input_temp.new_zeros((inputs.size(0), inputs.size(1), traj_input_temp.size(-1)))
+            traj_input_temp = self.feature_extractor(traj_inputs[:,start_index:,:])
+            traj_input = traj_input_temp.new_zeros((traj_inputs.size(0), traj_inputs.size(1), traj_input_temp.size(-1)))
             traj_input[:,start_index:,:] = traj_input_temp
-            all_goal_traj, all_cvae_dec_traj, KLD, total_probabilities = self.encoder(inputs, targets, traj_input, None, start_index)
+            all_goal_traj, all_cvae_dec_traj, KLD, total_probabilities = self.encoder(traj_inputs, targets, traj_input, None, start_index)
             return all_goal_traj, all_cvae_dec_traj, KLD, total_probabilities
+
+
+if __name__ == '__main__':
+    from .SGNet import parse_sgnet_args
+    import pdb
+    args = parse_sgnet_args()
+    args.enc_steps = 4
+    args.dec_steps = 8
+    x = torch.rand((2, 4, 4))
+    batch = {'traj': x}
+    model = SGNet_CVAE(args)
+    all_goal_traj, all_dec_traj, KLD, total_probabilities = model(batch, training=False)
+    print(all_goal_traj.shape, all_dec_traj.shape)
+    pdb.set_trace()
