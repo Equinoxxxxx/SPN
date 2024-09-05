@@ -4,7 +4,7 @@ from ..data.nusc_split import TRAIN_SC, VAL_SC
 from ..data.coord_transform import nusc_3dbbox_to_2dbbox
 from ..visualize.visualize_bbox import draw_box, draw_boxes_on_img
 from ..utils import makedir
-from ..data.normalize import img_mean_std, norm_imgs
+from ..data.normalize import img_mean_std_BGR, norm_imgs
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
 from .dataset_id import DATASET2ID
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
@@ -43,7 +43,7 @@ class NuscDataset(torch.utils.data.Dataset):
                  augment_mode='random_hflip',
                  resize_mode='even_padded',
                  ctx_size=(224, 224),
-                 color_order='BGR', 
+                 target_color_order='BGR', 
                  img_norm_mode='torch',
                  modalities=['img', 'sklt', 'ctx', 'traj', 'ego', 'social'],
                  img_format='',
@@ -57,7 +57,10 @@ class NuscDataset(torch.utils.data.Dataset):
         super().__init__()
         self.data_root = data_root
         self.subset = subset
+        if self.subset == 'test':
+            self.subset = 'val'
         self.dataset_name = 'nuscenes'
+        print(f'------------------Init{self.dataset_name}------------------')
         self.fps = 2
         self.obs_len = obs_len
         self.pred_len = pred_len
@@ -77,7 +80,7 @@ class NuscDataset(torch.utils.data.Dataset):
         self.augment_mode = augment_mode
         self.resize_mode = resize_mode
         self.ctx_size = ctx_size
-        self.color_order = color_order
+        self.target_color_order = target_color_order
         self.img_norm_mode = img_norm_mode
         self.modalities = modalities
         self.img_format = img_format
@@ -101,7 +104,7 @@ class NuscDataset(torch.utils.data.Dataset):
                             'resized_crop': {'img': None,
                                             'ctx': None,
                                             'sklt': None}}
-        self.img_mean, self.img_std = img_mean_std(self.img_norm_mode)
+        self.img_mean, self.img_std = img_mean_std_BGR(self.img_norm_mode)
         self._load_tk_id_dicts()
 
         self.nusc_root = NUSC_ROOT
@@ -123,7 +126,7 @@ class NuscDataset(torch.utils.data.Dataset):
 
 
         # get cid to img name to obj id dict
-        if os.path.exists(self.imgnm_to_objid_path):
+        if os.path.exists(self.imgnm_to_objid_path) and False:
             with open(self.imgnm_to_objid_path, 'rb') as f:
                 self.imgnm_to_objid = pickle.load(f)
         else:
@@ -171,7 +174,8 @@ class NuscDataset(torch.utils.data.Dataset):
         obs_bbox_unnormed = torch.tensor(self.samples['obs']['bbox_2d'][idx]).float()  # ltrb
         pred_bbox = torch.tensor(self.samples['pred']['bbox_2d_normed'][idx]).float()
         pred_bbox_unnormed = torch.tensor(self.samples['pred']['bbox_2d'][idx]).float()
-        obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float()
+        obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float().unsqueeze(1)
+        assert len(obs_ego.shape) == 2
         sce_id_int = torch.tensor(int(self.samples['obs']['sce_id'][idx][0]))
         ins_id_int = torch.tensor(int(float(self.samples['obs']['ins_id'][idx][0])))
         sam_id_int = torch.tensor(self.samples['obs']['sam_id'][idx])
@@ -219,7 +223,7 @@ class NuscDataset(torch.utils.data.Dataset):
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
-            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid)
+            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float()
         if 'img' in self.modalities:
             imgs = []
             for sam_id in self.samples['obs']['sam_id'][idx]:
@@ -240,7 +244,7 @@ class NuscDataset(torch.utils.data.Dataset):
             if self.img_norm_mode != 'ori':
                 ped_imgs = norm_imgs(ped_imgs, self.img_mean, self.img_std)
             # BGR -> RGB
-            if self.color_order == 'RGB':
+            if self.target_color_order == 'RGB':
                 ped_imgs = torch.flip(ped_imgs, dims=[0])
             sample['ped_imgs'] = ped_imgs
         if 'sklt' in self.modalities:
@@ -313,8 +317,8 @@ class NuscDataset(torch.utils.data.Dataset):
                 if self.img_norm_mode != 'ori':
                     ctx_imgs = norm_imgs(ctx_imgs, 
                                          self.img_mean, self.img_std)
-                # RGB -> BGR
-                if self.color_order == 'RGB':
+                # BGR -> RGB
+                if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])
                 if self.ctx_format == 'ped_graph':
                     all_c_seg = []
@@ -356,8 +360,8 @@ class NuscDataset(torch.utils.data.Dataset):
                 # normalize img
                 if self.img_norm_mode != 'ori':
                     ctx_imgs = norm_imgs(ctx_imgs, self.img_mean, self.img_std)
-                # RGB -> BGR
-                if self.color_order == 'RGB':
+                # BGR -> RGB
+                if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])  # 3THW
                 # load segs
                 ctx_segs = {c:[] for c in self.seg_cls}
@@ -851,7 +855,8 @@ class NuscDataset(torch.utils.data.Dataset):
 
     def downsample_seq(self):
         for k in self.samples['obs']:
-            if len(self.samples['obs'][k][0]) == self._obs_len:
+            if len(self.samples['obs'][k][0]) == self._obs_len\
+                and (k not in ('neighbor_oid', 'neighbor_cls')):
                 new_k = []
                 for s in range(len(self.samples['obs'][k])):
                     ori_seq = self.samples['obs'][k][s]

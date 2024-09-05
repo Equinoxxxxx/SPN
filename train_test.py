@@ -8,12 +8,14 @@ from tools.utils import get_cls_weights_multi
 from tools.loss.classification_loss import FocalLoss3
 from tools.loss.mse_loss import sgnet_rmse_loss, calc_mse
 from tools.loss.cvae_loss import sgnet_cvae_loss, calc_stoch_mse
+from tools.loss.mono_sem_loss import calc_topk_monosem, calc_mono_sem_align_loss
 from tools.metrics import calc_acc, calc_auc, calc_confusion_matrix, calc_f1, \
     calc_mAP, calc_precision, calc_recall
 from models.SGNet import accumulate_traj, traj_to_sgnet_target
 
 
-def train_test_epoch(model,
+def train_test_epoch(args,
+                     model,
                      model_name,
                      dataloader, 
                      optimizer=None,
@@ -46,7 +48,7 @@ def train_test_epoch(model,
                                                 dataloader=dataloader,
                                                 loss_weight='sklearn',
                                                 device=device,
-                                                use_cross=True,
+                                                act_sets=args.act_sets,
                                                 )
         for k in cls_weights_multi:
             if cls_weights_multi[k] is not None:
@@ -69,11 +71,14 @@ def train_test_epoch(model,
     total_traj_mse = 0
     total_pose_mse = 0
     total_pose_loss = 0
+    total_traj_loss = 0
     total_sgnet_goal_loss = 0
     total_sgnet_dec_loss = 0
     total_sgnet_cvae_loss = 0
     total_logsig_loss = 0
-    total_mono_sem_eff = 0
+    total_mono_sem_loss = 0
+    total_mono_sem_l1_loss = 0
+    total_mono_sem_align_loss = 0
     # targets and logits for whole epoch
     targets_e = {}
     logits_e = {}
@@ -105,7 +110,7 @@ def train_test_epoch(model,
         targets['communicative'] = data['communicative'].to(device).view(-1)
         targets['transporting'] = data['transporting'].to(device).view(-1)
         targets['age'] = data['age'].to(device).view(-1)
-        targets['pred_traj'] = data['pred_bboxes'].to(device)
+        targets['pred_traj'] = data['pred_bboxes'].to(device)  # B predlen 4
         targets['pred_sklt'] = data['pred_skeletons'].to(device)  # B ndim predlen nj
 
         # forward
@@ -115,7 +120,6 @@ def train_test_epoch(model,
             if model_name == 'sgnet':
                 out = model(inputs)
                 pred_traj = out['pred_traj']
-                logits = out['cls_logits']
                 all_goal_traj, all_dec_traj = out['ori_output']
                 target_traj = traj_to_sgnet_target(inputs['traj'], targets['pred_traj'])
                 goal_loss = traj_loss_func(all_goal_traj, target_traj)
@@ -128,17 +132,17 @@ def train_test_epoch(model,
                 total_sgnet_dec_loss += dec_loss.item()
                 total_traj_mse += traj_mse.item()
             elif model_name == 'sgnet_cvae':
-                out = model(inputs, training=is_train)
+                gt_traj = targets['pred_traj']
+                target_traj = traj_to_sgnet_target(inputs['traj'], gt_traj)
+                out = model(inputs, training=is_train, targets=target_traj)
                 pred_traj = out['pred_traj']
-                logits = out['cls_logits']
                 all_goal_traj, cvae_dec_traj, KLD_loss, _  = out['ori_output']
-                target_traj = traj_to_sgnet_target(inputs['traj'], targets['pred_traj'])
                 goal_loss = traj_loss_func(all_goal_traj, target_traj)
                 cvae_loss = sgnet_cvae_loss(cvae_dec_traj, target_traj)
                 goal_loss = traj_loss_func(all_goal_traj, target_traj)
                 # pred_traj = accumulate_traj(inputs['traj'], all_dec_traj)  # B predlen K 4
-                traj_mse = calc_stoch_mse(pred_traj, 
-                                          target_traj, 
+                traj_mse = calc_stoch_mse(pred_traj,  # B predlen K 4
+                                          gt_traj, # B
                                           loss_params['stoch_mse_type'])
                 loss = goal_loss + cvae_loss + KLD_loss.mean()
                 # add to total loss
@@ -153,7 +157,7 @@ def train_test_epoch(model,
                 loss = traj_mse * loss_params['mse_eff']
                 if loss_params['cls_eff'] > 0:
                     for k in logits:
-                        if iter == 0:
+                        if n_iter == 0:
                             targets_e[k] = targets[k].detach()
                             logits_e[k] = logits[k].detach()
                         else:
@@ -171,31 +175,117 @@ def train_test_epoch(model,
                 out = model(batch, loss_params['n_sampling'], is_train)
                 loss = out['loss'].mean()
                 # predicted pose
-                pred_traj = out['pred_traj']  # B K ndim*nj T
-                gt_traj = targets['pred_sklt']  # B ndim predlen nj
-                batch_size, n_dim, pred_len, nj = gt_traj.size()
-                pred_traj = pred_traj.reshape(batch_size, -1, n_dim, nj, pred_len).\
+                pred_pose = out['pred']  # B K ndim*nj T
+                gt_pose = targets['pred_sklt']  # B ndim predlen nj
+                batch_size, n_dim, pred_len, nj = gt_pose.size()
+                pred_pose = pred_pose.reshape(batch_size, -1, n_dim, nj, pred_len).\
                             permute(0,4,1,3,2)
-                gt_traj = gt_traj.permute(0,2,3,1)
-                pose_mse = calc_stoch_mse(pred_traj,  # B predlen K nj ndim
-                                            gt_traj,  # B predlen nj ndim
+                gt_pose = gt_pose.permute(0,2,3,1)
+                pose_mse = calc_stoch_mse(pred_pose,  # B predlen K nj ndim
+                                            gt_pose,  # B predlen nj ndim
                                             loss_params['stoch_mse_type'])
                 total_pose_mse += pose_mse.mean().item()
                 total_pose_loss += loss.item()
+            elif model_name in ('PCPA', 'ped_graph'):
+                out = model(inputs)
+                logits = out['cls_logits']
+                if loss_params['cls_eff'] > 0:
+                    for k in logits:
+                        if n_iter == 0:
+                            targets_e[k] = targets[k].detach()
+                            logits_e[k] = logits[k].detach()
+                        else:
+                            targets_e[k] = torch.cat((targets_e[k], targets[k].detach()), dim=0)
+                            logits_e[k] = torch.cat((logits_e[k], logits[k].detach()), dim=0)
+                    ce_dict = {}
+                    for k in logits:
+                        ce_dict[k] = cls_loss_func(logits[k], 
+                                                   targets[k], 
+                                                   weight=cls_weights_multi[k])
+                        loss = loss + ce_dict[k] * loss_params['cls_eff']
+            elif model_name == 'pedspace':
+                batch = (inputs, targets)
+                out = model(batch, is_train)
+                logits = out['cls_logits']
+                loss = 0
+                # pose loss
+                if loss_params['pose_mse_eff'] > 0:
+                    pose_loss = out['pose_loss'].mean()
+                    total_pose_loss += pose_loss.item()
+                    loss = loss + pose_loss * loss_params['pose_mse_eff']
+                    # predicted pose
+                    pred_pose = out['pred_pose']  # B K ndim*nj obslen+predlen
+                    gt_pose = targets['pred_sklt']  # B ndim predlen nj
+                    batch_size, n_dim, pred_len, nj = gt_pose.size()
+                    obslen = pred_pose.size(3) - pred_len
+                    pred_pose = pred_pose[:,:,:,obslen:].reshape(batch_size, -1, n_dim, nj, pred_len).\
+                                permute(0,4,1,3,2)
+                    gt_pose = gt_pose.permute(0,2,3,1)
+                    pose_mse = calc_stoch_mse(pred_pose,  # B predlen K nj ndim
+                                                gt_pose,  # B predlen nj ndim
+                                                loss_params['stoch_mse_type'])
+                    total_pose_mse += pose_mse.mean().item()
+                if loss_params['mse_eff'] > 0:
+                    traj_loss = out['traj_loss'].mean()
+                    total_traj_loss += traj_loss.item()
+                    loss = loss + traj_loss * loss_params['mse_eff']
+                    # predicted traj
+                    pred_traj = out['pred_traj']  # B K 4 obslen+predlen
+                    gt_traj = targets['pred_traj']  # B predlen 4
+                    batch_size, pred_len, n_dim = gt_traj.size()
+                    obslen = pred_traj.size(3) - pred_len
+                    pred_traj = pred_traj[:,:,:,obslen:].permute(0,3,1,2)  # B predlen K 4
+                    try:
+                        traj_mse = calc_stoch_mse(pred_traj,  # B predlen K 4
+                                              gt_traj,  # B predlen 4
+                                              loss_params['stoch_mse_type'])
+                    except:
+                        import pdb; pdb.set_trace()
+                    total_traj_mse += traj_mse.mean().item()
+                # ce loss
+                if loss_params['cls_eff'] > 0:
+                    for k in logits:
+                        if n_iter == 0:
+                            targets_e[k] = targets[k].detach()
+                            logits_e[k] = logits[k].detach()
+                        else:
+                            try:
+                                targets_e[k] = torch.cat((targets_e[k], targets[k].detach()), dim=0)
+                            except:
+                                import pdb; pdb.set_trace()
+                            logits_e[k] = torch.cat((logits_e[k], logits[k].detach()), dim=0)
+                    ce_dict = {}
+                    for k in logits:
+                        ce_dict[k] = cls_loss_func(logits[k], 
+                                                   targets[k], 
+                                                   weight=cls_weights_multi[k])
+                        loss = loss + ce_dict[k] * loss_params['cls_eff']
+                # top k mono loss
+                proto_simi = out['proto_simi']  # B P
+                sparsity, topk_indices = calc_topk_monosem(proto_simi, 
+                                                            args.topk,
+                                                            args.topk_metric)
+                if loss_params['mono_sem_eff'] > 0:
+                    mono_sem_loss = -sparsity.mean()
+                    total_mono_sem_loss += mono_sem_loss.item()
+                    loss = loss + mono_sem_loss * loss_params['mono_sem_eff']
+                if loss_params['mono_sem_l1_eff'] > 0:
+                    mono_sem_l1_loss = sparsity.abs().mean()
+                    total_mono_sem_l1_loss += mono_sem_l1_loss.item()
+                    loss = loss + mono_sem_l1_loss * loss_params['mono_sem_l1_eff']
+                if loss_params['mono_sem_align_eff'] > 0 and loss_params['cls_eff'] > 0:
+                    mono_sem_align_loss = 0
+                    for act_set in logits:
+                        weights = model.module.proto_dec[act_set].weight  # n_cls, n_proto
+                        mono_sem_align_loss += calc_mono_sem_align_loss(weights, 
+                                                                        sparsity,
+                                                                        loss_params['mono_sem_align_func'])
+                    total_mono_sem_align_loss += mono_sem_align_loss.item()
+                    loss = loss + mono_sem_align_loss * loss_params['mono_sem_align_eff']
             else:
                 raise NotImplementedError()
-            
-            # collect targets and logits in batch
-            if loss_params['cls_eff']>0:
-                for k in logits:
-                    if n_iter == 0:
-                        targets_e[k] = targets[k].detach()
-                        logits_e[k] = logits[k].detach()
-                    else:
-                        targets_e[k] = torch.cat((targets_e[k], targets[k].detach()), dim=0)
-                        logits_e[k] = torch.cat((logits_e[k], logits[k].detach()), dim=0)
+            # backward
             if is_train:
-                # optimize
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -221,6 +311,8 @@ def train_test_epoch(model,
         if is_train:
             del loss
         torch.cuda.empty_cache()
+        if n_iter%50 == 0:
+            print(f'cur mem allocated: {torch.cuda.memory_allocated(device)}')
 
     # calc metric
     acc_e = {}
@@ -258,7 +350,7 @@ def train_test_epoch(model,
                     'map': mAP_e[k],
                     'f1': f1_e[k],
                     'auc': auc_cross,
-                    'logits': logits_e['cross'].detach().cpu().numpy(),
+                    # 'logits': logits_e['cross'].detach().cpu().numpy(),
                 }
                 log(f'\tacc: {acc_e[k]}\t mAP: {mAP_e[k]}\t f1: {f1_e[k]}\t f1b: {f1b_e[k]}\t AUC: {auc_cross}')
                 log(f'\tprecision: {prec_e[k]}')
@@ -269,19 +361,34 @@ def train_test_epoch(model,
                     'acc': acc_e[k],
                     'f1': f1_e[k],
                     'map': mAP_e[k],
-                    'logits': logits_e[k]
+                    # 'logits': logits_e[k]
                 }
                 log(f'\t{k} acc: {acc_e[k]}\t {k} mAP: {mAP_e[k]}\t {k} f1: {f1_e[k]}')
                 log(f'\t{k} recall: {rec_e[k]}')
                 log(f'\t{k} precision: {prec_e[k]}')
+    res['traj_mse'] = total_traj_mse / (n_iter+1)
+    res['pose_mse'] = total_pose_mse / (n_iter+1)
+    res['logsig_loss'] = total_logsig_loss / (n_iter+1)
+    res['mono_sem_loss'] = total_mono_sem_loss / (n_iter+1)
+    res['mono_sem_l1_loss'] = total_mono_sem_l1_loss / (n_iter+1)
+    res['mono_sem_align_loss'] = total_mono_sem_align_loss / (n_iter+1)
     if loss_params['mse_eff'] > 0:
-        res['traj_mse'] = total_traj_mse / (n_iter+1)
+        
         log(f'\t traj mse: {total_traj_mse / (n_iter+1)}')
     if loss_params['pose_mse_eff'] > 0:
-        res['pose_mse'] = total_pose_mse / (n_iter+1)
+        
         log(f'\t pose mse: {total_pose_mse / (n_iter+1)}')
     if loss_params['logsig_loss_eff'] > 0:
-        res['logsig_loss'] = total_logsig_loss / (n_iter+1)
+        
         log(f'\t logsig loss: {total_logsig_loss / (n_iter+1)}')
+    if loss_params['mono_sem_eff'] > 0:
+        
+        log(f'\t mono_sem_loss: {total_mono_sem_loss / (n_iter+1)}')
+    if loss_params['mono_sem_l1_eff'] > 0:
+        
+        log(f'\t mono_sem_l1_loss: {total_mono_sem_l1_loss / (n_iter+1)}')
+    if loss_params['mono_sem_align_eff'] > 0:
+        
+        log(f'\t mono_sem_align_loss: {total_mono_sem_align_loss / (n_iter+1)}')
     log('\n')
     return res

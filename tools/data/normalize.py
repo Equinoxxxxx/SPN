@@ -1,6 +1,6 @@
 
 
-def img_mean_std(norm_mode):
+def img_mean_std_BGR(norm_mode):
     # BGR order
     if norm_mode == 'activitynet':
         # mean = [0.4477, 0.4209, 0.3906]
@@ -29,6 +29,7 @@ def norm_imgs(imgs, means, stds):
     '''
     imgs: torch.tensor: C (T) H W
     means: list: [B mean, G mean, R mean]
+    stds: list: [B std, G std, R std]
     '''
     # if len(imgs.size()) == 4:
     #     C, T, H, W = imgs.size()
@@ -49,7 +50,7 @@ def norm_imgs(imgs, means, stds):
 
 def recover_norm_imgs(imgs, means, stds):
     '''
-    imgs: torch.tensor: C (T) H W
+    imgs: torch.tensor: 3 ...
     means: list: [B mean, G mean, R mean]
     '''
     imgs[0] = imgs[0] * stds[0]

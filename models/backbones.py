@@ -3,6 +3,7 @@ from turtle import forward
 from numpy.lib.function_base import copy
 import torch
 import torch.nn as nn
+import torchvision
 from thop import profile
 # from torchviz import make_dot
 from torchsummary import summary
@@ -14,6 +15,7 @@ from .R3D import generate_model
 from .I3D import I3D_backbone
 from .VGG import vgg16_backbone
 from .mmbackbones2 import create_mm_backbones
+from .mytransformer import set_attn_args, SaveOutput, MyTransformerEncoder, MyTransformerEncoderLayer
 from tools.datasets.TITAN import NUM_CLS_ATOMIC, NUM_CLS_COMPLEX, NUM_CLS_COMMUNICATIVE, NUM_CLS_TRANSPORTING, NUM_CLS_AGE
 from config import cktp_root
 
@@ -32,7 +34,7 @@ FLATTEN_DIM = {
     'C3D_full': 8192,
 }
 
-LAST_CHANNEL = {
+LAST_DIM = {
     'R3D18': 512,
     'R3D18_clean':512,
     'R3D50': 2048,
@@ -44,6 +46,9 @@ LAST_CHANNEL = {
     'C3D_t4': 512,
     'C3D_t4_clean': 512,
     'C3D_full': 512,
+    'deeplabv3_resnet50': 2048,
+    'deeplabv3_resnet101': 2048,
+    'transformerencoder1D': 64,
 }
 
 BACKBONE_TO_OUTDIM = {
@@ -65,6 +70,29 @@ BACKBONE_TO_OUTDIM = {
     'poseC3D_clean': 512,
     'lstm': 128
 }
+
+BACKBONE_TO_TENSOR_ORDER = {
+    'C3D': 3,
+    'C3D_new': 3,
+    'C3D_clean': 3,
+    'R3D18': 3,
+    'R3D18_clean': 3,
+    'R3D18_new': 3,
+    'R3D34': 3,
+    'R3D34_clean': 3,
+    'R3D34_new': 3,
+    'R3D50': 3,
+    'R3D50_new': 3,
+    'R3D50_clean': 3,
+    'ircsn152': 3,
+    'poseC3D_pretrained': 3,
+    'poseC3D': 3,
+    'poseC3D_clean': 3,
+    'I3D': 3,
+    'lstm': 1,
+    'VGG16': 3,
+}
+
 
 class BackBones(nn.Module):
     def __init__(self, backbone_name,
@@ -95,7 +123,7 @@ class BackBones(nn.Module):
         self.backbone = create_backbone(backbone_name=backbone_name)
 
         if self.pool != 'flatten':
-            feat_channel = LAST_CHANNEL[backbone_name]
+            feat_channel = LAST_DIM[backbone_name]
             self.final_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         else:
             feat_channel = FLATTEN_DIM[backbone_name]
@@ -252,7 +280,6 @@ class PoseC3DDecoder(nn.Module):
 
     def forward(self, x):
         return self.up_sample(x)
-
 
 class RNNEncoder(nn.Module):
     def __init__(self, in_dim=4, h_dim=128, cell='lstm') -> None:
@@ -752,7 +779,90 @@ class BackboneOnly(nn.Module):
 
         return x
 
-def create_backbone(backbone_name, lstm_h_dim=128, lstm_input_dim=4, last_dim=487):
+class Deeplabv3Backbone(nn.Module):
+    def __init__(self, backbone, key='out') -> None:
+        super().__init__()
+        self.backbone = backbone
+        self.key = key
+    
+    def forward(self, x):
+        if len(x.size()) == 5:  # B C T H W
+            x = x[:,:,-1]  # B C T H W -> B C H W
+        x = self.backbone(x)
+        return x[self.key]
+
+class CustomTransformerEncoder1D(nn.Module):
+    def __init__(self, in_dim=2, d_model=64, nhead=8, num_encoder_layers=1):
+        super(CustomTransformerEncoder1D, self).__init__()
+        self.in_dim = in_dim
+        self.d_model = d_model
+        self.conv1d = nn.Conv1d(self.in_dim, d_model, kernel_size=1)
+        # self.transformer = nn.TransformerEncoder(
+        #     nn.TransformerEncoderLayer(d_model=d_model, 
+        #                                nhead=nhead, 
+        #                                dim_feedforward=d_model,
+        #                                activation="gelu",
+        #                                batch_first=True),
+        #     num_layers=num_encoder_layers
+        # )
+        # # register hook
+        # for n,m in self.transformer.named_modules():
+        #     if isinstance(m, nn.MultiheadAttention):
+        #         set_attn_args(m)
+        #         m.register_forward_hook(self.get_attn)
+        # self.attn_list = []
+        self.transformer = MyTransformerEncoder(
+            MyTransformerEncoderLayer(
+                d_model=d_model, 
+                nhead=nhead, 
+                dim_feedforward=d_model,
+                activation="gelu",
+                batch_first=True
+            ),
+            num_layers=num_encoder_layers
+            )
+    
+    def get_attn(self, module, input, output):
+        # print(f'getting attn {len(output)}')
+        self.attn_list.append(output[1].clone().detach())  # n_layer * ()
+    
+    def time_embedding(self, x):
+        B, C, T = x.size()
+        pos = torch.arange(T, device=x.device).float().unsqueeze(0).expand(B, T).unsqueeze(-1)  # B T 1
+        embedding = torch.zeros(B, T, C, device=x.device)
+        div_term = 1 / torch.pow(
+            10000.0, torch.arange(0, C, 2).to(x.device) / C
+        )  # d/2,
+        embedding[:, :, 0::2] = torch.sin(pos * div_term)
+        embedding[:, :, 1::2] = torch.cos(pos * div_term)
+
+        return embedding.permute(0, 2, 1)  # B d T
+
+    def forward(self, x):
+        '''
+        x:   (B 2 obslen nj) or (B obslen 4/5)
+        '''
+        self.attn_list = []
+        if len(x.size()) == 4:  # B 2 obslen nj --> # B 2 obslen*nj
+            B, in_dim, obslen, nj = x.size()
+            x = x.view(B, in_dim, obslen*nj)
+        elif len(x.size()) == 3:
+            x = x.permute(0, 2, 1)  # B obslen 4 --> B 4 obslen
+
+        x = self.conv1d(x)  # B C T
+
+        x = x + self.time_embedding(x)
+        x = x.permute(0, 2, 1)  # B T C
+        x, self.attn_list = self.transformer(x)
+        x = x.permute(0, 2, 1)  # B C T
+        # try:
+        #     print(f'attn shape: {self.attn_list[0].size()}')
+        # except:
+        #     import pdb;pdb.set_trace()
+        return x
+    
+
+def create_backbone(backbone_name, modality=None, lstm_h_dim=128, lstm_input_dim=4, last_dim=487):
     if backbone_name == 'C3D_new':  # 3, 16, 224, 224 -> 512, 1, 8, 8
         backbone = C3D_backbone(pretrained=True, t_downsample='new')
     elif backbone_name == 'C3D':
@@ -844,6 +954,28 @@ def create_backbone(backbone_name, lstm_h_dim=128, lstm_input_dim=4, last_dim=48
         backbone = PoseC3DDecoder()
     elif backbone_name == 'C3Ddecoder':
         backbone = C3DDecoder()
+    elif backbone_name == 'deeplabv3_resnet50':
+        model = torch.hub.load('pytorch/vision', 
+                           'deeplabv3_resnet50', 
+                           weights='DeepLabV3_ResNet50_Weights.DEFAULT',
+                           )
+        backbone = Deeplabv3Backbone(model.backbone, key='out')
+    elif backbone_name == 'deeplabv3_resnet101':
+        model = torch.hub.load('pytorch/vision', 
+                           'deeplabv3_resnet101', 
+                           weights='DeepLabV3_ResNet101_Weights.DEFAULT',
+                           )
+        backbone = Deeplabv3Backbone(model.backbone, key='out')
+    elif backbone_name == 'transformerencoder1D':
+        if modality == 'traj':
+            in_dim = 4
+        elif modality == 'sklt':
+            in_dim = 2
+        elif modality == 'social':
+            in_dim = 5
+        elif modality == 'ego':
+            in_dim = 1
+        backbone = CustomTransformerEncoder1D(in_dim=in_dim)
     else:
         raise ValueError(backbone_name)
     return backbone
@@ -935,8 +1067,6 @@ def record_t_conv3d_info(conv_info):
         p_list.append(cur_p if isinstance(cur_p, int) else cur_p[0])
     return [k_list, s_list, p_list]
 
-def load_pretrained_resnet(model, path):
-    pass
 
 if __name__ == "__main__":
     inputs = torch.ones(1, 3, 16, 224, 224)  # B, C, T, H, W

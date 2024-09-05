@@ -26,12 +26,12 @@ class DiffusionEmbedding(nn.Module):
             "embedding",
             self._build_embedding(num_steps, embedding_dim / 2),
             persistent=False,
-        )  # T, embedding_dim
+        )  # not trainable  T, embedding_dim
         self.projection1 = nn.Linear(embedding_dim, projection_dim)
         self.projection2 = nn.Linear(projection_dim, projection_dim)
 
     def forward(self, diffusion_step):
-        x = self.embedding[diffusion_step]  # embed dim
+        x = self.embedding[diffusion_step]  # T embedding_dim
         x = self.projection1(x)
         x = F.silu(x)
         x = self.projection2(x)
@@ -74,10 +74,14 @@ class diff_CSDI(nn.Module):
         )
 
     def forward(self, x, cond_info, diffusion_step):
+        '''
+        x: (B, 2, 2*nj, T)
+        cond_info: (B, t_emb+f_emb+1, 2*nj, T)
+        '''
         B, inputdim, K, L = x.shape
 
         x = x.reshape(B, inputdim, K * L)
-        x = self.input_projection(x)
+        x = self.input_projection(x)  # B, C, K * L
         x = F.relu(x)
         x = x.reshape(B, self.channels, K, L)
 

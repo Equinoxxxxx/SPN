@@ -2,7 +2,7 @@ import math
 import torch
 from torch import nn
 import numpy as np
-from tools.datasets.TITAN import KEY_2_N_CLS
+from tools.datasets.TITAN import ACT_SET_TO_N_CLS
     
 
 class PedGraph(nn.Module):
@@ -160,8 +160,8 @@ class PedGraph(nn.Module):
         )
         self.last_layers = {}
         for act_set in self.act_sets:
-            self.last_layers[act_set] = nn.Linear(self.ch2, KEY_2_N_CLS[act_set])
-            nn.init.normal_(self.last_layers[act_set].weight, 0, math.sqrt(2. / KEY_2_N_CLS[act_set]))
+            self.last_layers[act_set] = nn.Linear(self.ch2, ACT_SET_TO_N_CLS[act_set])
+            nn.init.normal_(self.last_layers[act_set].weight, 0, math.sqrt(2. / ACT_SET_TO_N_CLS[act_set]))
         self.last_layers = nn.ModuleDict(self.last_layers)
         # pooling sigmoid fucntion for image feature fusion
         self.ctx_sigm = nn.Sigmoid()
@@ -239,7 +239,9 @@ class PedGraph(nn.Module):
         for act_set in self.act_sets:
             logits[act_set] = self.last_layers[act_set](x_fuse)
 
-        return logits, feats
+        return {'cls_logits': logits,
+                'proj_feats': feats,
+                }
     
     def get_pretrain_params(self):
         bb_params = []

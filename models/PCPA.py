@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from .backbones import create_backbone, FLATTEN_DIM, LAST_CHANNEL
-from tools.datasets.TITAN import KEY_2_N_CLS
+from .backbones import create_backbone, FLATTEN_DIM, LAST_DIM
+from tools.datasets.TITAN import ACT_SET_TO_N_CLS
 
 
 class PCPA(nn.Module):
@@ -98,7 +98,7 @@ class PCPA(nn.Module):
         # last layers
         self.final_layers = {}
         for act_set in self.act_sets:
-            self.final_layers[act_set] = nn.Linear(self.h_dim, KEY_2_N_CLS[act_set], bias=False)
+            self.final_layers[act_set] = nn.Linear(self.h_dim, ACT_SET_TO_N_CLS[act_set], bias=False)
         self.final_layers = nn.ModuleDict(self.final_layers)
 
     def attention(self, h_seq, att_w, out_w, h_dim=256, mask=None):
@@ -185,7 +185,8 @@ class PCPA(nn.Module):
         for k in self.act_sets:
             logits[k] = self.final_layers[k](feat_att)
         # , m_scores.squeeze(-1)
-        return logits, proj_feats  
+        return {'cls_logits': logits,
+                'proj_feats': proj_feats,}
     
     def get_pretrain_params(self):
         bb_params = []

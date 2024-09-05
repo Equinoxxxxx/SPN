@@ -5,12 +5,41 @@ import torch.nn as nn
 import numpy as np
 from .diffusion_util import diff_CSDI
 
+deposit_config = {
+    'train':
+        {
+            'epochs': 100,
+            'batch_size': 32,
+            'batch_size_test': 32,
+            'lr': 1.0e-3
+        },
+    'diffusion':
+        {
+            'layers': 4,
+            'channels': 64,
+            'nheads': 8,
+            'diffusion_embedding_dim': 128,
+            'beta_start': 0.0001,
+            'beta_end': 0.5,
+            'num_steps': 50,
+            'schedule': "cosine"
+        },
+    'model':
+        {
+            'is_unconditional': 0,
+            'timeemb': 128,
+            'featureemb': 16
+        }
+}
 
-class ModelMain(nn.Module):
-    def __init__(self, config, device, target_dim=96):
+class Deposit(nn.Module):
+    def __init__(self, config, device, target_dim=34, w_mm_cond=0, mm_cond_dim=512, modality='sklt'):
         super().__init__()
         self.device = device
-        self.target_dim = target_dim  # joints * 3
+        self.target_dim = target_dim  # joints * n_coords or 4(or 5 or 1)
+        self.w_mm_cond = w_mm_cond
+        self.mm_cond_dim = mm_cond_dim
+        self.modality = modality
 
         self.emb_time_dim = config["model"]["timeemb"]
         self.emb_feature_dim = config["model"]["featureemb"]
@@ -19,6 +48,8 @@ class ModelMain(nn.Module):
         self.emb_total_dim = self.emb_time_dim + self.emb_feature_dim
         if not self.is_unconditional:
             self.emb_total_dim += 1  # for conditional mask
+        if self.w_mm_cond:
+            self.emb_total_dim += self.mm_cond_dim
         self.embed_layer = nn.Embedding(
             num_embeddings=self.target_dim, embedding_dim=self.emb_feature_dim
         )
@@ -47,7 +78,7 @@ class ModelMain(nn.Module):
 
         self.alpha_hat = 1 - self.beta
         self.alpha = np.cumprod(self.alpha_hat)
-        self.alpha_torch = torch.tensor(self.alpha).float().to(self.device).unsqueeze(1).unsqueeze(1)
+        self.alpha_torch = torch.tensor(self.alpha).float().unsqueeze(1).unsqueeze(1)
 
     def betas_for_alpha_bar(self, num_diffusion_timesteps, alpha_bar, max_beta=0.5):
         # """
@@ -71,31 +102,45 @@ class ModelMain(nn.Module):
         '''
         pos: B,T
         '''
-        pe = torch.zeros(pos.shape[0], pos.shape[1], d_model).to(self.device)  # B T d
+        pe = torch.zeros(pos.shape[0], pos.shape[1], d_model).to(pos.device)  # B T d
         position = pos.unsqueeze(2)  # B T 1
         div_term = 1 / torch.pow(
-            10000.0, torch.arange(0, d_model, 2).to(self.device) / d_model
+            10000.0, torch.arange(0, d_model, 2).to(pos.device) / d_model
         )  # d/2,
         pe[:, :, 0::2] = torch.sin(position * div_term)
         pe[:, :, 1::2] = torch.cos(position * div_term)
         return pe
 
-    def get_side_info(self, observed_tp, cond_mask):
-        B, K, L = cond_mask.shape  # B 54 50
+    def get_side_info(self, observed_tp, cond_mask, mm_cond=None):
+        '''
+        observed_tp: B,T
+        cond_mask: B,C,T
+        mm_cond: B,mm_cond_dim
+        '''
+        try:
+            B, K, L = cond_mask.shape  # B 54 50
+        except:
+            import pdb; pdb.set_trace()
 
-        time_embed = self.time_embedding(observed_tp, self.emb_time_dim)  # (B,L,emb)
-        time_embed = time_embed.unsqueeze(2).expand(-1, -1, K, -1)
+        time_embed = self.time_embedding(observed_tp, self.emb_time_dim)  # (B,L,t_emb)
+        time_embed = time_embed.unsqueeze(2).expand(-1, -1, K, -1)  # (B,L,K,t_emb)
         feature_embed = self.embed_layer(
-            torch.arange(self.target_dim).to(self.device)
-        )  # (K,emb)
+            torch.arange(self.target_dim).to(observed_tp.device)
+        )  # (K,feat_emb)
         feature_embed = feature_embed.unsqueeze(0).unsqueeze(0).expand(B, L, -1, -1)
-
-        side_info = torch.cat([time_embed, feature_embed], dim=-1)  # (B,L,K,*)
+        try:
+            side_info = torch.cat([time_embed, feature_embed], dim=-1)  # (B,L,K,*)
+        except:
+            import pdb; pdb.set_trace()
         side_info = side_info.permute(0, 3, 2, 1)  # (B,t_emb+f_emb,K,L)
 
         if not self.is_unconditional:
             side_mask = cond_mask.unsqueeze(1)  # (B,1,K,L)
             side_info = torch.cat([side_info, side_mask], dim=1)  # B,t_emb+f_emb+1,K,L
+        
+        if self.w_mm_cond:
+            mm_cond = mm_cond.unsqueeze(2).unsqueeze(3).expand(-1, -1, K, L)
+            side_info = torch.cat([side_info, mm_cond], dim=1)  # B,t_emb+f_emb+1+cond_emb,K,L
 
         return side_info
 
@@ -115,16 +160,16 @@ class ModelMain(nn.Module):
     ):
         B, K, L = observed_data.shape
         if is_train != 1:  # for validation
-            t = (torch.ones(B) * set_t).long().to(self.device)
+            t = (torch.ones(B) * set_t).long()
         else:
-            t = torch.randint(0, self.num_steps, [B]).to(self.device)
-        current_alpha = self.alpha_torch[t].to(self.device)  # (B,1,1)
-        noise = torch.randn_like(observed_data).to(self.device)  # normal gaussian
+            t = torch.randint(0, self.num_steps, [B])
+        current_alpha = self.alpha_torch[t].to(observed_data.device)  # (B,1,1)
+        noise = torch.randn_like(observed_data).to(observed_data.device)  # normal gaussian
         noisy_data = (current_alpha ** 0.5) * observed_data + (1.0 - current_alpha) ** 0.5 * noise
 
         total_input = self.set_input_to_diffmodel(noisy_data, observed_data, cond_mask)
 
-        predicted = self.diffmodel(total_input, side_info, t)  # (B,K,L)
+        predicted = self.diffmodel(total_input, side_info, t.to(total_input.device))  # (B,K,L)
 
         target_mask = 1 - cond_mask
         residual = (noise - predicted) * target_mask
@@ -148,7 +193,7 @@ class ModelMain(nn.Module):
     def impute(self, observed_data, cond_mask, side_info, n_samples):
         B, K, L = observed_data.shape
 
-        imputed_samples = torch.zeros(B, n_samples, K, L).to(self.device)
+        imputed_samples = torch.zeros(B, n_samples, K, L).to(observed_data.device)
 
         for i in range(n_samples):
             # generate noisy observation for unconditional model
@@ -170,7 +215,7 @@ class ModelMain(nn.Module):
                     cond_obs = (cond_mask * observed_data).unsqueeze(1)
                     noisy_target = ((1 - cond_mask) * current_sample).unsqueeze(1)
                     diff_input = torch.cat([cond_obs, noisy_target], dim=1)  # (B,2,K,L)
-                predicted = self.diffmodel(diff_input, side_info, torch.tensor([t]).to(self.device))
+                predicted = self.diffmodel(diff_input, side_info, torch.tensor([t]).to(observed_data.device))
 
                 coeff1 = 1 / self.alpha_hat[t] ** 0.5
                 coeff2 = (1 - self.alpha_hat[t]) / (1 - self.alpha[t]) ** 0.5
@@ -186,17 +231,19 @@ class ModelMain(nn.Module):
             imputed_samples[:, i] = (current_sample * (1 - cond_mask) + observed_data * cond_mask).detach()
         return imputed_samples
 
-    def forward(self, batch, n_samples, is_train=1):
+    def forward(self, batch, n_samples=5, mm_cond=None, is_train=1):
         '''
         batch: (inputs, target)
         '''
         (
-            observed_data,
+            observed_data,  # B C T
             observed_tp,
             gt_mask
         ) = self.process_data(batch)
         cond_mask = gt_mask  # B C T
-        side_info = self.get_side_info(observed_tp, cond_mask)
+        side_info = self.get_side_info(observed_tp=observed_tp, 
+                                       cond_mask=cond_mask, 
+                                       mm_cond=mm_cond)
         loss_func = self.calc_loss if is_train == 1 else self.calc_loss_valid
         loss = loss_func(observed_data, cond_mask, side_info, is_train)
         samples = None
@@ -205,13 +252,13 @@ class ModelMain(nn.Module):
             # B K nj*ndim T
             samples = self.impute(observed_data, cond_mask, side_info, n_samples)
         return {'loss': loss,
-                'pred_sklt': samples}
+                'pred': samples}
 
-    def evaluate(self, batch, n_samples):
+    def evaluate(self, batch, n_samples, mm_cond=None):
         (
-            observed_data,
-            observed_tp,
-            gt_mask
+            observed_data,  # B obs+pred 2*nj
+            observed_tp,  # B obs+pred,
+            gt_mask  # B obs+pred 2*nj
         ) = self.process_data(batch)
 
         with torch.no_grad():
@@ -223,37 +270,48 @@ class ModelMain(nn.Module):
             samples = self.impute(observed_data, cond_mask, side_info, n_samples)
         return samples, observed_data, target_mask, observed_tp
 
-    def _process_data(self, batch):
+    # def _process_data(self, batch):
         
-        pose = batch["pose"].to(self.device).float()
-        tp = batch["timepoints"].to(self.device).float()
-        mask = batch["mask"].to(self.device).float()
+    #     pose = batch["pose"].to(self.device).float()
+    #     tp = batch["timepoints"].to(self.device).float()
+    #     mask = batch["mask"].to(self.device).float()
 
-        pose = pose.permute(0, 2, 1)  # B C T
-        mask = mask.permute(0, 2, 1)  # B C T
+    #     pose = pose.permute(0, 2, 1)  # B C T
+    #     mask = mask.permute(0, 2, 1)  # B C T
 
-        return (
-            pose,
-            tp,
-            mask
-        )
+    #     return (
+    #         pose,
+    #         tp,
+    #         mask
+    #     )
     
     def process_data(self, batch):
         inputs, targets = batch
-        input_pose = inputs['sklt']  # B 2 obslen nj
-        gt_pose = targets['pred_sklt']  # B 2 predlen nj
-        batch_size = input_pose.size(0)
-        n_dim = input_pose.size(1)
-        obslen = input_pose.size(2)
-        predlen = gt_pose.size(2)
-        nj = input_pose.size(3)
-        pose = torch.concat([input_pose, gt_pose], 2)  # B 2 obslen+predlen nj
-        pose = pose.permute(0,2,1,3).reshape(batch_size, obslen+predlen, -1)
-        mask = torch.zeros_like(pose).to(pose.device).float()  # B obslen+predlen 2*nj
-        mask[:, :obslen] = 1
-        tp = torch.arange(obslen+predlen).unsqueeze(0).repeat(batch_size,1).to(pose.device).float()
-        return {
-            pose,
-            tp,
-            mask
-        }
+        if self.modality == 'sklt':
+            input_seq = inputs['sklt']  # B 2 obslen nj
+            gt_seq = targets['pred_sklt']  # B 2 predlen nj
+            batch_size = input_seq.size(0)
+            n_dim = input_seq.size(1)
+            obslen = input_seq.size(2)
+            predlen = gt_seq.size(2)
+            nj = input_seq.size(3)
+            seq = torch.concat([input_seq, gt_seq], 2)  # B 2 obslen+predlen nj
+            seq = seq.permute(0,1,3,2).reshape(batch_size,-1,obslen+predlen)  # B 2*nj obslen+predlen
+            # seq = seq.permute(0,2,1,3).reshape(batch_size, obslen+predlen, -1)  # B obslen+predlen 2*nj
+        elif self.modality == 'traj':
+            input_seq = inputs['traj']  # B obslen 4
+            gt_seq = targets['pred_traj']  # B predlen 4
+            batch_size = input_seq.size(0)
+            obslen = input_seq.size(2)
+            predlen = gt_seq.size(2)
+            seq = torch.concat([input_seq, gt_seq], 2)  # B 4 obslen+predlen
+            # seq = seq.permute(0,2,1)  # B obslen+predlen 4
+
+        mask = torch.zeros_like(seq).to(seq.device).float()  # B C obslen+predlen
+        mask[:, :, :obslen] = 1
+        tp = torch.arange(obslen+predlen).unsqueeze(0).repeat(batch_size,1).to(seq.device).float()
+        return (
+            seq, # B 2*nj obslen+predlen
+            tp,  # B obslen+predlen
+            mask # B 2*nj obslen+predlen
+        )

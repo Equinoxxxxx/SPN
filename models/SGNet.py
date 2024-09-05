@@ -6,7 +6,7 @@ import argparse
 
 
 def parse_sgnet_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description='sgnet args')
     parser.add_argument('--checkpoint', default='', type=str)
     parser.add_argument('--start_epoch', default=1, type=int)
     parser.add_argument('--gpu', default='0', type=str)
@@ -39,6 +39,43 @@ def parse_sgnet_args():
     parser.add_argument('--pred_dim', default=4, type=int)
     parser.add_argument('--input_dim', default=4, type=int)
     return parser.parse_args()
+
+def parse_sgnet_args2():
+    return sgnet_args()
+
+class sgnet_args:
+    def __init__(self) -> None:
+        self.checkpoint = ''
+        self.start_epoch = 1
+        self.gpu = '0'
+        self.num_workers = 8
+        self.epochs = 50
+        self.batch_size = 128
+        self.weight_decay = 5e-04
+        self.seed = 1
+        self.phases = ['train', 'test']
+        self.shuffle = True
+        
+        self.dataset = 'PIE'
+        self.lr = 5e-04
+        self.data_root = 'data/PIE'
+        self.model = 'SGNet_CVAE'
+        self.bbox_type = 'cxcywh'
+        self.normalize = 'zero-one'
+        self.hidden_size = 512
+        self.enc_steps = 15
+        self.dec_steps = 45
+        self.dropout = 0.0
+        self.nu = 0.0
+        self.sigma = 1.5
+        self.FPS = 30
+        self.min_bbox = [0,0,0,0]
+        self.max_bbox = [1920, 1080, 1920, 1080]
+        self.K = 20
+        self.DEC_WITH_Z = True
+        self.LATENT_DIM = 32
+        self.pred_dim = 4
+        self.input_dim = 4
 
 
 class JAADFeatureExtractor(nn.Module):
@@ -277,11 +314,16 @@ class SGNet(nn.Module):
 def accumulate_traj(obs_traj: torch.Tensor, 
                     target: torch.Tensor):
     '''
-    obs_traj: B obslen, ...
-    target: B obslen predlen, ...
+    obs_traj: B obslen 4
+    target: B obslen predlen (K) 4
     '''
-    obs_traj = obs_traj.unsqueeze(2)  # B obslen 1 ...
-    target += obs_traj
+    obs_traj = obs_traj.unsqueeze(2)  # B obslen 1 4
+    if len(target.size()) == 5:  # case of stochastic model
+        obs_traj = obs_traj.unsqueeze(3)
+    try:
+        target += obs_traj
+    except:
+        import pdb; pdb.set_trace()
     return target[:, -1]  # B predlen ...
 
 def traj_to_sgnet_target(obs_traj: torch.Tensor, 
@@ -292,7 +334,7 @@ def traj_to_sgnet_target(obs_traj: torch.Tensor,
     '''
     obslen = obs_traj.size(1)
     predlen = obs_traj.size(1)
-    seq = torch.concat(obs_traj, pred_traj, dim=1)
+    seq = torch.concat([obs_traj, pred_traj], dim=1)
     target = []
     for i in range(obslen):
         target.append(

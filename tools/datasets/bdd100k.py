@@ -12,7 +12,7 @@ import numpy as np
 from scipy import interpolate
 from torchvision.transforms import functional as TVF
 from ..data.preprocess import bdd100k_get_vidnm2vidid
-from ..data.normalize import img_mean_std, norm_imgs
+from ..data.normalize import img_mean_std_BGR, norm_imgs
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
 from .dataset_id import DATASET2ID, ID2DATASET
@@ -56,7 +56,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                  obs_len=4, pred_len=4, overlap_ratio=0.5,
                  norm_traj=False,
                  obs_fps=2,
-                 color_order='BGR', img_norm_mode='torch',
+                 target_color_order='BGR', img_norm_mode='torch',
                  small_set=0,
                  min_h=72,
                  min_w=36,
@@ -76,19 +76,22 @@ class BDD100kDataset(torch.utils.data.Dataset):
                  ):
         super().__init__()
         self.dataset_name = 'bdd100k'
+        print(f'------------------Init{self.dataset_name}------------------')
         self.img_size = (720, 1280)
         self.fps = 5
         self.data_root = os.path.join(dataset_root, 'BDD100k/bdd100k')
         self.fps = 5
         self.subsets = subsets
+        if self.subsets == 'test':
+            self.subsets = 'val'
         self.obs_len = obs_len
         self.pred_len = pred_len
         self.seq_interval = self.fps // obs_fps - 1
         self.overlap_ratio = overlap_ratio
         self.norm_traj = norm_traj
-        self.color_order = color_order
+        self.target_color_order = target_color_order
         self.img_norm_mode = img_norm_mode
-        self.img_mean, self.img_std = img_mean_std(self.img_norm_mode)
+        self.img_mean, self.img_std = img_mean_std_BGR(self.img_norm_mode)
         # sequence length considering interval
         self.min_h = min_h
         self.min_w = min_w
@@ -146,7 +149,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
         self.v_tracks = self._get_accel(self.v_tracks)
 
         # get neighbor info
-        if os.path.exists(self.imgnm_to_objid_path):
+        if os.path.exists(self.imgnm_to_objid_path) and False:
             with open(self.imgnm_to_objid_path, 'rb') as f:
                 self.imgnm_to_objid = pickle.load(f)
         else:
@@ -191,7 +194,8 @@ class BDD100kDataset(torch.utils.data.Dataset):
         obs_bbox_unnormed = torch.tensor(self.samples['obs']['bbox'][idx]).float()
         pred_bbox = torch.tensor(self.samples['pred']['bbox_normed'][idx]).float()
         pred_bbox_unnormed = torch.tensor(self.samples['pred']['bbox'][idx]).float()
-        obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float()
+        obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float().unsqueeze(1)
+        assert len(obs_ego.shape) == 2
         vid_id_int = torch.tensor(int(self.samples['obs']['vid_id'][idx][0]))
         obj_id_int = torch.tensor(int(float(self.samples['obs']['obj_id'][idx][0])))
         img_id_int = torch.tensor(self.samples['obs']['img_id_int'][idx])
@@ -238,7 +242,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
-            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid)
+            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float()
         if 'img' in self.modalities:
             imgs = []
             for img_id in self.samples['obs']['img_id_int'][idx]:
@@ -258,7 +262,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
             if self.img_norm_mode != 'ori':
                 ped_imgs = norm_imgs(ped_imgs, self.img_mean, self.img_std)
             # BGR -> RGB
-            if self.color_order == 'RGB':
+            if self.target_color_order == 'RGB':
                 ped_imgs = torch.flip(ped_imgs, dims=[0])
             sample['ped_imgs'] = ped_imgs
         if 'sklt' in self.modalities:
@@ -328,8 +332,8 @@ class BDD100kDataset(torch.utils.data.Dataset):
                 if self.img_norm_mode != 'ori':
                     ctx_imgs = norm_imgs(ctx_imgs, 
                                          self.img_mean, self.img_std)
-                # RGB -> BGR
-                if self.color_order == 'RGB':
+                # BGR -> RGB
+                if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])
                 # load cropped segmentation map
                 if self.ctx_format == 'ped_graph':
@@ -344,8 +348,11 @@ class BDD100kDataset(torch.utils.data.Dataset):
                                                 'ped',
                                                 str(oid),
                                                 str(img_id)+'.pkl')
-                        with open(seg_path, 'rb') as f:
-                            segmap = pickle.load(f)*1  # h w int
+                        try:
+                            with open(seg_path, 'rb') as f:
+                                segmap = pickle.load(f)*1  # h w int
+                        except:
+                            import pdb; pdb.set_trace()
                         all_c_seg.append(torch.from_numpy(segmap))
                     all_c_seg = torch.stack(all_c_seg, dim=-1)  # h w n_cls
                     all_c_seg = torch.argmax(all_c_seg, dim=-1, keepdim=True).permute(2, 0, 1)  # 1 h w
@@ -370,8 +377,8 @@ class BDD100kDataset(torch.utils.data.Dataset):
                 # normalize img
                 if self.img_norm_mode != 'ori':
                     ctx_imgs = norm_imgs(ctx_imgs, self.img_mean, self.img_std)
-                # RGB -> BGR
-                if self.color_order == 'RGB':
+                # BGR -> RGB
+                if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])  # 3THW
                 # load segs
                 ctx_segs = {c:[] for c in self.seg_cls}
@@ -841,7 +848,8 @@ class BDD100kDataset(torch.utils.data.Dataset):
     
     def downsample_seq(self):
         for k in self.samples['obs']:
-            if len(self.samples['obs'][k][0]) == self._obs_len:
+            if len(self.samples['obs'][k][0]) == self._obs_len\
+                and (k not in ('neighbor_oid', 'neighbor_cls')):
                 new_k = []
                 for s in range(len(self.samples['obs'][k])):
                     ori_seq = self.samples['obs'][k][s]

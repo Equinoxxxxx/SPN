@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from tools.datasets.TITAN import KEY_2_N_CLS
+from tools.datasets.TITAN import ACT_SET_TO_N_CLS
 from .backbones import create_backbone
 
 
@@ -344,12 +344,11 @@ class Next(nn.Module):
         for act_set in self.action_sets:
             self.future_act[act_set] = Linear(
                 input_size=feature_size,
-                output_size=KEY_2_N_CLS[act_set], 
+                output_size=ACT_SET_TO_N_CLS[act_set], 
                 add_bias=False)
         self.future_act = nn.ModuleDict(self.future_act)
         
     def decode(self,
-               batch, 
                first_input, 
                enc_last_state, 
                enc_h, 
@@ -422,10 +421,13 @@ class Next(nn.Module):
         enc_last_state_list.append(kp_obs_enc_last_state)
 
         # encode person scene
-        obs_personscene = batch['ctx'][:, -1] # B 4 T H W -> B T H W
-        obs_personscene = F.one_hot(obs_personscene, self.n_seg)  # B T H W n_seg
-        obs_personscene = obs_personscene.mean([1, 2,3])  # B H W n_seg
-        obs_personscene = self.conv3(self.conv2(obs_personscene))  # B C
+        obs_personscene = batch['ctx'][:, -1] # B 4 H W -> B H W
+        try:
+            obs_personscene = F.one_hot(obs_personscene.long(), self.n_seg)  # B H W n_seg
+        except:
+            import pdb; pdb.set_trace()
+        obs_personscene = obs_personscene.float()  # B H W n_seg
+        obs_personscene = self.conv3(self.conv2(obs_personscene)).mean(1).mean(1)  # B C
         obs_personscene = obs_personscene.unsqueeze(1).repeat(1, T, 1)  # B T C
         personscene_obs_enc_h, personscene_obs_enc_last_state = \
             self.enc_personscene(obs_personscene)
@@ -459,11 +461,11 @@ class Next(nn.Module):
         enc_last_state_list.append(other_obs_enc_last_state)
 
         obs_enc_h = torch.stack(enc_h_list, dim=1)
-        obs_enc_last_state = concat_states(enc_last_state_list, dim=1)  # B 5*d
+        obs_enc_last_state = concat_states(enc_last_state_list, dim=1).h  # B 5*d
         traj_obs_last = batch['traj'][:, -1]
         pred_length = self.pred_len
         traj_pred_out = self.decode(traj_obs_last, traj_obs_enc_last_state,
-                                         obs_enc_h, pred_length, self.dec_cell_traj, scope='decoder')
+                                         obs_enc_h, pred_length, self.dec_cell_traj)
         out = {'pred_traj': traj_pred_out,
                'cls_logits': {}}
         for k in self.action_sets:

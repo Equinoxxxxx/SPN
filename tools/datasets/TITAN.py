@@ -21,7 +21,7 @@ from .jaad_data import JAAD
 from ..utils import makedir
 from ..utils import mapping_20, ltrb2xywh, coord2pseudo_heatmap, TITANclip_txt2list, cls_weights
 from ..utils import get_random_idx
-from ..data.normalize import img_mean_std, norm_imgs
+from ..data.normalize import img_mean_std_BGR, norm_imgs
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
 from torchvision.transforms import functional as TVF
 from .dataset_id import DATASET2ID, ID2DATASET
@@ -221,7 +221,7 @@ LABEL_2_IMBALANCE_CLS = {
     'transporting': [0, 1, 2],
 }
 
-KEY_2_N_CLS = {
+ACT_SET_TO_N_CLS = {
     'cross': 2,
     'atomic': NUM_CLS_ATOMIC,
     'simple': NUM_CLS_SIMPLE,
@@ -242,7 +242,7 @@ class TITAN_dataset(Dataset):
                  neighbor_mode='last_frame',
                  obs_len=4, pred_len=4, overlap_ratio=0.5, recog_act=0,
                  obs_fps=2,
-                 color_order='BGR', img_norm_mode='torch',
+                 target_color_order='BGR', img_norm_mode='torch',
                  required_labels=['atomic_actions', 'simple_context'], 
                  multi_label_cross=0, 
                  act_sets=['cross'],
@@ -265,6 +265,7 @@ class TITAN_dataset(Dataset):
         self.img_size = (1520, 2704)
         self.fps = 10
         self.dataset_name = 'TITAN'
+        print(f'------------------Init{self.dataset_name}------------------')
         self.sub_set = sub_set
         self.norm_traj = norm_traj
         self.obs_len = obs_len
@@ -273,9 +274,9 @@ class TITAN_dataset(Dataset):
         self.overlap_ratio = overlap_ratio
         self.recog_act = recog_act
         self.obs_or_pred = 'obs' if self.recog_act else 'pred'
-        self.color_order = color_order
+        self.target_color_order = target_color_order
         self.img_norm_mode = img_norm_mode
-        self.img_mean, self.img_std = img_mean_std(self.img_norm_mode)
+        self.img_mean, self.img_std = img_mean_std_BGR(self.img_norm_mode)
         # sequence length considering interval
         self._obs_len = self.obs_len * (self.seq_interval + 1)
         self._pred_len = self.pred_len * (self.seq_interval + 1)
@@ -388,7 +389,7 @@ class TITAN_dataset(Dataset):
         # print('Crop done')
         # return
         # get cid to img name to obj id dict
-        if not os.path.exists(self.imgnm_to_objid_path):
+        if not os.path.exists(self.imgnm_to_objid_path) or True:
             self.imgnm_to_objid = \
                 self.get_imgnm_to_objid(self.p_tracks, 
                                         self.v_tracks, 
@@ -537,7 +538,8 @@ class TITAN_dataset(Dataset):
         obs_bbox_unnormed = torch.tensor(self.samples['obs']['bbox'][idx]).float()
         pred_bbox = torch.tensor(self.samples['pred']['bbox_normed'][idx]).float()
         pred_bbox_unnormed = torch.tensor(self.samples['pred']['bbox'][idx]).float()
-        obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float()[:, 0]  # [accel, ang_vel] 0 for accel only
+        obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float()[:, 0:1]  # [accel, ang_vel] 0 for accel only
+        assert len(obs_ego.shape) == 2
         clip_id_int = torch.tensor(int(self.samples['obs']['clip_id'][idx][0]))  # str --> int
         ped_id_int = torch.tensor(int(float(self.samples['obs']['obj_id'][idx][0])))
         img_nm_int = torch.tensor(self.samples['obs']['img_nm_int'][idx])
@@ -605,7 +607,7 @@ class TITAN_dataset(Dataset):
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()  # K T 5
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
-            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid)
+            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float()
         if 'img' in self.modalities:
             imgs = []
             for img_nm in self.samples['obs']['img_nm'][idx]:
@@ -624,7 +626,7 @@ class TITAN_dataset(Dataset):
             if self.img_norm_mode != 'ori':
                 ped_imgs = norm_imgs(ped_imgs, self.img_mean, self.img_std)
             # BGR -> RGB
-            if self.color_order == 'RGB':
+            if self.target_color_order == 'RGB':
                 ped_imgs = torch.flip(ped_imgs, dims=[0])
             sample['ped_imgs'] = ped_imgs
         if 'ctx' in self.modalities:
@@ -648,8 +650,8 @@ class TITAN_dataset(Dataset):
                 if self.img_norm_mode != 'ori':
                     ctx_imgs = norm_imgs(ctx_imgs, 
                                          self.img_mean, self.img_std)
-                # RGB -> BGR
-                if self.color_order == 'RGB':
+                # BGR -> RGB
+                if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])
                 # add segmentation channel
                 if self.ctx_format == 'ped_graph':
@@ -692,7 +694,7 @@ class TITAN_dataset(Dataset):
                 if self.img_norm_mode != 'ori':
                     ctx_imgs = norm_imgs(ctx_imgs, self.img_mean, self.img_std)
                 # RGB -> BGR
-                if self.color_order == 'RGB':
+                if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])  # 3THW
                 # load segs
                 ctx_segs = {c:[] for c in self.seg_cls}
@@ -1252,7 +1254,10 @@ class TITAN_dataset(Dataset):
                                 'veh':{}}
                 for j in range(obslen):
                     imgnm = samples['obs']['img_nm'][i][j]  # str
-                    cur_ped_ids = set(self.imgnm_to_objid[target_cid][imgnm]['ped'].keys())
+                    try:
+                        cur_ped_ids = set(self.imgnm_to_objid[target_cid][imgnm]['ped'].keys())
+                    except:
+                        import pdb;pdb.set_trace()
                     cur_ped_ids.remove(target_oid)
                     cur_veh_ids = set(self.imgnm_to_objid[target_cid][imgnm]['veh'].keys())
                     # ped neighbor for cur sample
@@ -1358,7 +1363,7 @@ class TITAN_dataset(Dataset):
         for k in self.samples['obs']:
             # if 'neighbor' in k:
             #     import pdb;pdb.set_trace()
-            if len(self.samples['obs'][k][0]) == self._obs_len:
+            if len(self.samples['obs'][k][0]) == self._obs_len and (k not in ('neighbor_oid', 'neighbor_cls')):
                 new_k = []
                 for s in range(len(self.samples['obs'][k])):
                     ori_seq = self.samples['obs'][k][s]

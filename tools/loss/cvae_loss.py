@@ -27,7 +27,10 @@ def calc_stoch_mse(pred:torch.Tensor,
     '''
     K = pred.shape[2]
     target =  target.unsqueeze(2)  # B predlen 1 ... d
-    mse_all = torch.sqrt(torch.sum((pred-target)**2, dim=-1)).mean(1)  # B K ...
+    try:
+        mse_all = torch.sqrt(torch.sum((pred-target)**2, dim=-1)).mean(1)  # B K ...
+    except:
+        import pdb;pdb.set_trace()
     while len(mse_all.shape) > 2:
         mse_all = mse_all.mean(-1)  # B K
     if stoch_mse_type == 'best':

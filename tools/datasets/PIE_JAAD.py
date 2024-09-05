@@ -20,7 +20,7 @@ from .pie_data import PIE
 from .jaad_data import JAAD
 from ..utils import mapping_20, makedir, ltrb2xywh, coord2pseudo_heatmap, cls_weights
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
-from ..data.normalize import img_mean_std, norm_imgs
+from ..data.normalize import img_mean_std_BGR, norm_imgs
 from ..general import HiddenPrints
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
 from .dataset_id import DATASET2ID, ID2DATASET
@@ -43,7 +43,7 @@ class PIEDataset(Dataset):
                  do_balance=False,
                  subset='train', 
                  bbox_size=(224, 224), ctx_size=(224, 224), 
-                 color_order='BGR', crop_from_ori=False,
+                 target_color_order='BGR', crop_from_ori=False,
                  resize_mode='even_padded', min_wh=None, max_occ=2, 
                  modalities=['img', 'sklt', 'ctx', 'traj', 'ego', 'social'],
                  img_format='',
@@ -63,6 +63,7 @@ class PIEDataset(Dataset):
                  ):
         super(Dataset, self).__init__()
         self.dataset_name = dataset_name
+        print(f'------------------Init{self.dataset_name}------------------')
         self.fps = 30
         self.img_size = (1080, 1920)
         self.seq_type = seq_type
@@ -71,8 +72,8 @@ class PIEDataset(Dataset):
         self.subset = subset
         self.normalize_pos = normalize_pos
         self.img_norm_mode = img_norm_mode
-        self.color_order = color_order
-        self.img_mean, self.img_std = img_mean_std(self.img_norm_mode)  # BGR
+        self.target_color_order = target_color_order
+        self.img_mean, self.img_std = img_mean_std_BGR(self.img_norm_mode)  # BGR
         self.obs_len = obs_len
         self.pred_len = pred_len
         self.overlap_ratio = overlap_ratio
@@ -201,7 +202,7 @@ class PIEDataset(Dataset):
         
         # get img name to obj id dict
         if self.dataset_name == 'PIE':
-            if not os.path.exists(self.imgnm_to_objid_path):
+            if not os.path.exists(self.imgnm_to_objid_path) or True:
                 # (set id ->) vid id -> img nm -> ped/veh -> oid -> bbox
                 self.imgnm_to_objid = \
                     self.get_imgnm_to_objid(self.p_tracks, 
@@ -304,6 +305,7 @@ class PIEDataset(Dataset):
                 (k, len(self.samples[k]), self.num_samples)
 
         # class count
+        # import pdb;pdb.set_trace()
         self.n_c = sum(np.squeeze(self.samples['target']))
         self.n_nc = self.num_samples - self.n_c
         self.num_samples_cls = [self.n_nc, self.n_c]
@@ -322,7 +324,8 @@ class PIEDataset(Dataset):
         pred_bboxes_unnormed = torch.tensor(self.samples['pred_bbox'][idx]).float()
         target = torch.tensor(self.samples['target'][idx][-1])
         obs_ego = \
-            torch.tensor(self.samples['obs_ego'][idx]).float().reshape(-1)
+            torch.tensor(self.samples['obs_ego'][idx]).float().reshape(-1, 1)
+        assert len(obs_ego.shape) == 2, obs_ego.shape
         set_id_int = self.samples['obs_set_id_int'][idx][-1] if self.dataset_name == 'PIE' else 0
 
         # obs_ego = torch.cat([obs_ego, torch.zeros(obs_ego.size())], dim=-1)
@@ -372,7 +375,7 @@ class PIEDataset(Dataset):
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
-            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid)
+            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float()
         if 'sklt' in self.modalities:
             if 'coord' in self.sklt_format:
                 pid = self.samples['obs_pid'][idx][0][0]
@@ -484,7 +487,7 @@ class PIEDataset(Dataset):
                 if self.img_norm_mode != 'ori':
                     ped_imgs = norm_imgs(ped_imgs, self.img_mean, self.img_std)
                 # BGR -> RGB
-                if self.color_order == 'RGB':
+                if self.target_color_order == 'RGB':
                     # ped_imgs = torch.from_numpy(np.ascontiguousarray(ped_imgs.numpy()[::-1, :, :, :]))  # 3 T H W
                     ped_imgs = torch.flip(ped_imgs, dims=[0])
                 # load heatmaps
@@ -542,7 +545,7 @@ class PIEDataset(Dataset):
             if self.img_norm_mode != 'ori':
                 ped_imgs = norm_imgs(ped_imgs, self.img_mean, self.img_std)
             # BGR -> RGB
-            if self.color_order == 'RGB':
+            if self.target_color_order == 'RGB':
                 # ped_imgs = torch.from_numpy(np.ascontiguousarray(ped_imgs.numpy()[::-1, :, :, :]))
                 ped_imgs = torch.flip(ped_imgs, dims=[0])
             sample['ped_imgs'] = ped_imgs  # shape [3, obs_len, H, W]
@@ -566,7 +569,7 @@ class PIEDataset(Dataset):
                     ctx_imgs = norm_imgs(ctx_imgs, 
                                          self.img_mean, self.img_std)
                 # BGR -> RGB
-                if self.color_order == 'RGB':
+                if self.target_color_order == 'RGB':
                    ctx_imgs = torch.flip(ctx_imgs, dims=[0])
                 # load cropped seg
                 if self.ctx_format == 'ped_graph':
@@ -613,7 +616,7 @@ class PIEDataset(Dataset):
                                          self.img_mean, 
                                          self.img_std)
                 # BGR -> RGB
-                if self.color_order == 'RGB':
+                if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])  # CTHW
                 # load seg maps
                 ctx_segs = {c:[] for c in self.seg_cls}
@@ -680,7 +683,7 @@ class PIEDataset(Dataset):
                 if self.img_norm_mode != 'ori':
                     ctx_imgs = norm_imgs(ctx_imgs, self.img_mean, self.img_std)
                 # BGR -> RGB
-                if self.color_order == 'RGB':
+                if self.target_color_order == 'RGB':
                     ctx_imgs = torch.from_numpy(np.ascontiguousarray(ctx_imgs.numpy()[::-1, :, :, :]))
                 sample['pred_context'] = ctx_imgs  # shape [3, obs_len, H, W]
 
@@ -1199,8 +1202,8 @@ class PIEDataset(Dataset):
     def downsample_seq(self):
         new_samples = {}
         for k in self.samples:
-            if 'obs' in k and len(self.samples[k][0]) == self._obs_len:
-
+            if 'obs' in k and len(self.samples[k][0]) == self._obs_len \
+                and (k not in ('neighbor_oid', 'neighbor_cls')):
                 new_samples[k] = []
                 for s in range(len(self.samples[k])):
                     ori_seq = self.samples[k][s]

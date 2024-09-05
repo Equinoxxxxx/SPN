@@ -331,7 +331,7 @@ def save_model(model, model_dir, model_name, accu=0, log=print):
     model: this is not the multigpu model
     '''
     # torch.save(obj=model.state_dict(), f=os.path.join(model_dir, (model_name + '{0:.4f}.pth').format(accu)))
-    torch.save(obj=model, f=os.path.join(model_dir, (model_name + '{0:.4f}.pth').format(accu)))
+    torch.save(obj=model.state_dict(), f=os.path.join(model_dir, (model_name + '{0:.4f}.pth').format(accu)))
     log('Model saved in ' + model_dir)
 
 
@@ -671,61 +671,42 @@ def get_cls_weights_multi(model,
                             dataloader,
                             loss_weight,
                             device='cpu',
-                            multi_label_cross=0, 
-                            use_atomic=0,
-                            use_complex=0,
-                            use_communicative=0,
-                            use_transporting=0,
-                            use_age=0,
-                            use_cross=1):
+                            act_sets='cross',
+                            ):
     '''
     num_samples_cls: list (n_cls,)
     return:
         multi_weights: dict {tensor: (n_cls,)}
     '''
-    weight = None
-    atomic_weight = None
-    complex_weight = None
-    communicative_weight = None
-    transporting_weight = None
-    age_weight = None
-
-    if loss_weight == 'trainable':
-        if use_cross:
-            weight = F.softmax(model.module.class_weights, dim=-1)
-        if use_atomic:
-            atomic_weight = F.softmax(model.module.atomic_weights, dim=-1)
-        if use_complex:
-            complex_weight = F.softmax(model.module.complex_weights, dim=-1)
-        if use_communicative:
-            communicative_weight = F.softmax(model.module.communicative_weights, dim=-1)
-        if use_transporting:
-            transporting_weight = F.softmax(model.module.transporting_weights, dim=-1)
-        if use_age:
-            age_weight = F.softmax(model.module.age_weights, dim=-1)
-    else:
-        if use_cross:
-            weight = cls_weights([dataloader.dataset.n_nc, dataloader.dataset.n_c], loss_weight, device=device)
-            if multi_label_cross:
-                num_samples_cls = dataloader.dataset.num_samples_cls
-                weight = cls_weights(num_samples_cls=num_samples_cls, loss_weight=loss_weight, device=device)
-        if use_atomic:
-            atomic_weight = cls_weights(dataloader.dataset.num_samples_atomic, loss_weight, device=device)
-        if use_complex:
-            complex_weight = cls_weights(dataloader.dataset.num_samples_complex, loss_weight, device=device)
-        if use_communicative:
-            communicative_weight = cls_weights(dataloader.dataset.num_samples_communicative, loss_weight, device=device)
-        if use_transporting:
-            transporting_weight = cls_weights(dataloader.dataset.num_samples_transporting, loss_weight, device=device)
-        if use_age:
-            age_weight = cls_weights(dataloader.dataset.num_samples_age, loss_weight, device=device)
-    
-    multi_weights = {'cross': weight,
-                    'atomic': atomic_weight,
-                    'complex': complex_weight,
-                    'communicative': communicative_weight,
-                    'transporting': transporting_weight,
-                    'age': age_weight}
+    act_set_to_attr = {'atomic': 'num_samples_atomic',
+                        'complex': 'num_samples_complex',
+                        'communicative': 'num_samples_communicative',
+                        'transporting': 'num_samples_transporting',
+                        'age': 'num_samples_age',}
+    multi_weights = {k: None for k in act_sets}
+    num_samples_cls = {k: None for k in act_sets}
+    for k in num_samples_cls:
+        weights = 0
+        if k == 'cross':
+            if isinstance(dataloader.dataset, torch.utils.data.ConcatDataset):
+                for i in range(len(dataloader.dataset.datasets)):
+                    cur_set = dataloader.dataset.datasets[i]
+                    if cur_set.dataset_name in ('TITAN', 'PIE', 'JAAD'):
+                        weights += np.array([cur_set.n_nc, cur_set.n_c])
+            else:
+                if dataloader.dataset.dataset_name in ('TITAN', 'PIE', 'JAAD'):
+                    weights = [dataloader.dataset.n_nc, dataloader.dataset.n_c]
+        else:
+            if isinstance(dataloader.dataset, torch.utils.data.ConcatDataset):
+                for i in range(len(dataloader.dataset.datasets)):
+                    cur_set = dataloader.dataset.datasets[i]
+                    if cur_set.dataset_name == 'TITAN':
+                        weights += np.array(getattr(cur_set, act_set_to_attr[k]))
+            else:
+                if dataloader.dataset.dataset_name in ('TITAN', 'PIE', 'JAAD'):
+                    weights = getattr(dataloader.dataset, act_set_to_attr[k])
+        num_samples_cls[k] = weights
+        multi_weights[k] = cls_weights(weights, loss_weight, device=device)
     return multi_weights
 
 def calc_n_samples_cls(labels, n_cls):

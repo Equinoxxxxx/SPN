@@ -153,7 +153,7 @@ class SGNet_CVAE(nn.Module):
         if self.dataset in ['JAAD','PIE']:
             traj_input = self.feature_extractor(traj_inputs)
             all_goal_traj, all_cvae_dec_traj, KLD, total_probabilities = self.encoder(traj_inputs, targets, traj_input)
-            traj_pred = accumulate_traj(traj_inputs, all_dec_traj)
+            traj_pred = accumulate_traj(traj_inputs, all_cvae_dec_traj) # B obs pred K d -> B pred K d
             out = {'pred_traj': traj_pred,  # B T K 4
                    'ori_output': (all_goal_traj, all_cvae_dec_traj, KLD, total_probabilities)}
             return out

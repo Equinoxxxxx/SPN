@@ -9,7 +9,7 @@ from .crop_images import crop_img_ctx_bdd100k, crop_ctx_PIE_JAAD, crop_img_PIE_J
 from .get_skeletons import get_skeletons
 from .get_segmentation import segment_dataset
 from .get_obj_tracks import track
-from config import dataset_root, datasets
+from config import dataset_root
 from ..datasets.nuscenes_dataset import save_scene_token_dict, save_instance_token_dict, save_sample_token_dict, save_ins_tokens, save_anns_in_sensor
 
 

@@ -503,8 +503,13 @@ def get_ped_graph_seg(mode='ori_local',
     parser = argparse.ArgumentParser()
     # device
     parser.add_argument("--dataset_names", default='PIE_JAAD_TITAN_nuscenes_bdd100k', type=str)
+    parser.add_argument("--oids_to_add_path", default=None, type=str)
     args = parser.parse_args()
     dataset_names = args.dataset_names
+    oids_to_add = None
+    if args.oids_to_add_path:
+        with open(args.oids_to_add_path, 'rb') as f:
+            oids_to_add = pickle.load(f)
     if 'PIE' in dataset_names:
         print('PIE')
         data_root = os.path.join(dataset_root, 'PIE_dataset')
@@ -536,6 +541,8 @@ def get_ped_graph_seg(mode='ori_local',
         for i in tqdm(range(num_tracks)):
             cur_pid = tracks['ped_id'][i][0][0]  # [[id], [id], ...]
             setid, vidid, oid = cur_pid.split('_')  # str
+            if oids_to_add is not None and oid not in oids_to_add:
+                continue
             track_len = len(tracks['ped_id'][i])
             for j in range(track_len):
                 img_path = tracks['image'][i][j]
@@ -600,6 +607,8 @@ def get_ped_graph_seg(mode='ori_local',
         for i in tqdm(range(num_tracks)):
             cur_pid = tracks['ped_id'][i][0][0]  # [[id], [id], ...]
             _, vidid, oid = cur_pid.split('_')
+            if oids_to_add is not None and oid not in oids_to_add:
+                continue
             track_len = len(tracks['ped_id'][i])
             for j in range(track_len):
                 img_path = tracks['image'][i][j]
@@ -648,6 +657,8 @@ def get_ped_graph_seg(mode='ori_local',
         for i in tqdm(range(num_tracks)):
             vidid = int(tracks['clip_id'][i][0])
             oid = int(float(tracks['obj_id'][i][0]))
+            if oids_to_add is not None and str(oid) not in oids_to_add:
+                            continue
             for j in range(len(tracks['clip_id'][i])):  # time steps in each track
                 img_nm = tracks['img_nm'][i][j].replace('.png', '')
                 l, t, r, b = list(map(int, tracks['bbox'][i][j]))
@@ -790,6 +801,9 @@ def get_ped_graph_seg(mode='ori_local',
                     for l in img_l['labels']:
                         cls = l['category']
                         oid = l['id']
+                        oid = str(int(oid))
+                        if oids_to_add is not None and oid not in oids_to_add:
+                            continue
                         cls_k = 'ped' if cls in ('other person', 'pedestrian', 'rider') else 'veh'
                         if cls_k != 'ped':
                             continue
@@ -984,8 +998,6 @@ def complement_jaad_seg():
 
 def complement_ped_graph_seg_jaad(mode='ori_local',
                                 target_size=(224, 224)):
-    
-    
     vidid_list = ['67', '72', '84', '83', '62', '68', '79', '63', '73', '69', '78', '71', '80', '64', '75', '66', '70', '86', '76', '82', '81', '65', '77', '74', '85']
     parser = argparse.ArgumentParser()
     parser.add_argument("--part", default=0, type=int)
@@ -1062,6 +1074,7 @@ def complement_ped_graph_seg_jaad(mode='ori_local',
                 tgt_path = os.path.join(tgt_dir, img_nm+'.pkl')
                 with open(tgt_path, 'wb') as f:
                     pickle.dump(cropped, f)
+    
 
 
 if __name__ == '__main__':
@@ -1070,5 +1083,5 @@ if __name__ == '__main__':
     #                     prompt=prompt)
 
     # complement segmentation data for nusc
-    # get_ped_graph_seg()
-    complement_ped_graph_seg_jaad()
+    get_ped_graph_seg()
+    
