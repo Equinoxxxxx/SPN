@@ -374,6 +374,7 @@ def train_test_epoch(args,
                     'acc': acc_e[k],
                     'f1': f1_e[k],
                     'map': mAP_e[k],
+                    'auc': 0,
                     # 'logits': logits_e[k]
                 }
                 log(f'\t{k} acc: {acc_e[k]}\t {k} mAP: {mAP_e[k]}\t {k} f1: {f1_e[k]}')
