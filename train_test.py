@@ -188,7 +188,10 @@ def train_test_epoch(args,
                 total_pose_loss += loss.item()
             elif model_name in ('PCPA', 'ped_graph'):
                 out = model(inputs)
-                logits = out['cls_logits']
+                try:
+                    logits = out['cls_logits']
+                except:
+                    import pdb; pdb.set_trace()
                 if loss_params['cls_eff'] > 0:
                     for k in logits:
                         if n_iter == 0:
@@ -340,7 +343,17 @@ def train_test_epoch(args,
     
     # log res
     log('\n')
+    # init res dict
     res = {}
+    # res['cls'] = {}
+    # for k in ('cross', 'atomic', 'complex', 'communicative', 'transporting', 'age'):
+    #     res['cls'][k] = {
+    #         'acc': 0,
+    #         'f1': 0,
+    #         'map': 0,
+    #     }
+    # res['cls']['cross']['auc'] = 0
+    # update res dict
     if loss_params['cls_eff'] > 0:
         res['cls'] = {}
         for k in acc_e:
@@ -366,29 +379,25 @@ def train_test_epoch(args,
                 log(f'\t{k} acc: {acc_e[k]}\t {k} mAP: {mAP_e[k]}\t {k} f1: {f1_e[k]}')
                 log(f'\t{k} recall: {rec_e[k]}')
                 log(f'\t{k} precision: {prec_e[k]}')
-    res['traj_mse'] = total_traj_mse / (n_iter+1)
-    res['pose_mse'] = total_pose_mse / (n_iter+1)
-    res['logsig_loss'] = total_logsig_loss / (n_iter+1)
-    res['mono_sem_loss'] = total_mono_sem_loss / (n_iter+1)
-    res['mono_sem_l1_loss'] = total_mono_sem_l1_loss / (n_iter+1)
-    res['mono_sem_align_loss'] = total_mono_sem_align_loss / (n_iter+1)
+    
+
     if loss_params['mse_eff'] > 0:
-        
+        res['traj_mse'] = total_traj_mse / (n_iter+1)
         log(f'\t traj mse: {total_traj_mse / (n_iter+1)}')
     if loss_params['pose_mse_eff'] > 0:
-        
+        res['pose_mse'] = total_pose_mse / (n_iter+1)
         log(f'\t pose mse: {total_pose_mse / (n_iter+1)}')
     if loss_params['logsig_loss_eff'] > 0:
-        
+        res['logsig_loss'] = total_logsig_loss / (n_iter+1)
         log(f'\t logsig loss: {total_logsig_loss / (n_iter+1)}')
     if loss_params['mono_sem_eff'] > 0:
-        
+        res['mono_sem_loss'] = total_mono_sem_loss / (n_iter+1)
         log(f'\t mono_sem_loss: {total_mono_sem_loss / (n_iter+1)}')
     if loss_params['mono_sem_l1_eff'] > 0:
-        
+        res['mono_sem_l1_loss'] = total_mono_sem_l1_loss / (n_iter+1)
         log(f'\t mono_sem_l1_loss: {total_mono_sem_l1_loss / (n_iter+1)}')
     if loss_params['mono_sem_align_eff'] > 0:
-        
+        res['mono_sem_align_loss'] = total_mono_sem_align_loss / (n_iter+1)
         log(f'\t mono_sem_align_loss: {total_mono_sem_align_loss / (n_iter+1)}')
     log('\n')
     return res

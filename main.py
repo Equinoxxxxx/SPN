@@ -223,7 +223,6 @@ def construct_model(args, device):
                      proj_actv=args.proj_actv,
                      pretrain=True,
                      act_sets=args.act_sets,
-                     n_mlp=args.n_mlp,
                      proj_dim=args.proj_dim,
                      )
     elif args.model_name == 'ped_graph':
@@ -307,6 +306,10 @@ def construct_optimizer_scheduler(args, model, train_loaders):
         lr_scheduler1 = torch.optim.lr_scheduler.MultiStepLR(
             optimizer1, milestones=[p1, p2], gamma=0.1
         )
+    elif args.model_name == 'PCPA':
+        optimizer1 = torch.optim.Adam(model.parameters(), 
+                                      lr=5e-5, 
+                                      weight_decay=1e-3)
     else:
         backbone_params, other_params = model.get_backbone_params()
         opt_specs1 = [{'params': backbone_params, 'lr': args.backbone_lr1},
@@ -514,18 +517,7 @@ def main(rank, world_size, args):
         'bdd100k': copy.deepcopy(curve_dict_dataset),
         # 'macro': copy.deepcopy(curve_dict_dataset),
     }
-    best_val_res = {
-        'cls': {},
-        'traj_mse':float('inf'),
-        'pose_mse':float('inf'),
-    }
-    for k in args.act_sets:
-        best_val_res['cls'][k] = {'acc':0,
-                                'auc':0,
-                                'f1':0,
-                                'map':0,}
-    best_test_res = copy.deepcopy(best_val_res)
-    best_e = 0
+    
     # loss params
     loss_params = [{
         'mse_eff': args.mse_eff[0],
@@ -557,7 +549,21 @@ def main(rank, world_size, args):
         'mono_sem_align_func': args.mono_sem_align_func,
         'mono_sem_align_eff': args.mono_sem_align_eff,
     }]
-
+    # best res
+    best_val_res = {}
+    if args.mse_eff[0] > 0:
+        best_val_res['traj_mse'] = float('inf')
+    if args.pose_mse_eff[0] > 0:
+        best_val_res['pose_mse'] = float('inf')
+    if args.cls_eff[0] > 0:
+        best_val_res['cls'] = {}
+        for k in args.act_sets:
+            best_val_res['cls'][k] = {'acc':0,
+                                    'auc':0,
+                                    'f1':0,
+                                    'map':0,}
+    best_test_res = copy.deepcopy(best_val_res)
+    best_e = 0
     # stage 1
     log('----------------------------STAGE 1----------------------------')
     for e in range(1, 1+args.epochs1):
@@ -617,7 +623,10 @@ def main(rank, world_size, args):
                     / len(args.test_dataset_names[0])
                 log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res[args.key_metric]}')
                 if cur_key_res < best_val_res[args.key_metric]:
-                    update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
+                    try:
+                        update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
+                    except:
+                        import pdb;pdb.set_trace()
                     best_e = e
             elif args.key_metric in ('f1', 'acc', 'auc', 'map') and args.cls_eff[0] > 0:
                 try:
@@ -652,6 +661,20 @@ def main(rank, world_size, args):
                         log=log)
                         
     log('----------------------------STAGE 2----------------------------')
+    # best res
+    best_val_res = {}
+    if args.mse_eff[1] > 0:
+        best_val_res['traj_mse'] = float('inf')
+    if args.pose_mse_eff[1] > 0:
+        best_val_res['pose_mse'] = float('inf')
+    if args.cls_eff[1] > 0:
+        for k in args.act_sets:
+            best_val_res['cls'][k] = {'acc':0,
+                                    'auc':0,
+                                    'f1':0,
+                                    'map':0,}
+    best_test_res = copy.deepcopy(best_val_res)
+    best_e = 0
     for e in range(1, 1+args.epochs2):
         log(f' stage 2 epoch {e}')
         train_res = train_test_epoch(args,

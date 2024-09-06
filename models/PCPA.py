@@ -145,8 +145,9 @@ class PCPA(nn.Module):
             if k != 'ctx':
                 self.encoders[k].flatten_parameters()
         if 'sklt' in x:
-            x['sklt'] = torch.flatten(x['sklt'].permute(0, 2, 3, 1), start_dim=2)  # B 2 T 17 -> B T 17 2 -> B T 2*17
-        if 'ego' in x:
+            B, nd, obslen, nj = x['sklt'].size()
+            x['sklt'] = x['sklt'].permute(0, 2, 1, 3).reshape(B, obslen, nd*nj)  # B 2 T 17 -> B T 17 2 -> B T 2*17
+        if 'ego' in x and len(x['ego'].shape) == 2:
             x['ego'] = x['ego'].unsqueeze(2)  # B T --> B T 1
         q_feat = None
         proj_feats = {}
@@ -185,8 +186,7 @@ class PCPA(nn.Module):
         for k in self.act_sets:
             logits[k] = self.final_layers[k](feat_att)
         # , m_scores.squeeze(-1)
-        return {'cls_logits': logits,
-                'proj_feats': proj_feats,}
+        return {'cls_logits': logits, 'proj_feats': proj_feats}
     
     def get_pretrain_params(self):
         bb_params = []

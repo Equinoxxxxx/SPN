@@ -144,6 +144,7 @@ def process_args(args):
         args.epochs2 = 0
         args.traj_format = '0-1ltrb'
     if args.model_name == 'PCPA':
+        args.batch_size1 = 8
         args.cls_eff1 = 1
         args.mse_eff1 = 0
         args.pose_mse_eff1 = 0
@@ -158,6 +159,7 @@ def process_args(args):
         else:
             args.sklt_format = 'coord'
         args.ctx_format = 'ori_local'
+        args.ctx_backbone_name = 'C3D_t4'
     elif args.model_name == 'ped_graph':
         args.mse_eff1 = 0
         args.mse_eff2 = 0
