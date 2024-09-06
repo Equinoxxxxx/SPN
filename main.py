@@ -372,14 +372,15 @@ def update_best_res(best_val_res,
                     curve_dict,
                     test_dataset_names,
                     ):
-    for act_set in best_val_res['cls']:
-        for metric in best_val_res['cls'][act_set]:
-            best_val_res['cls'][act_set][metric] = \
-                sum([curve_dict[d]['val']['cls'][act_set][metric][-1] for d in test_dataset_names]) \
-                / len(test_dataset_names)
-            best_test_res['cls'][act_set][metric] = \
-                sum([curve_dict[d]['test']['cls'][act_set][metric][-1] for d in test_dataset_names]) \
-                / len(test_dataset_names)
+    if 'cls' in best_val_res:
+        for act_set in best_val_res['cls']:
+            for metric in best_val_res['cls'][act_set]:
+                best_val_res['cls'][act_set][metric] = \
+                    sum([curve_dict[d]['val']['cls'][act_set][metric][-1] for d in test_dataset_names]) \
+                    / len(test_dataset_names)
+                best_test_res['cls'][act_set][metric] = \
+                    sum([curve_dict[d]['test']['cls'][act_set][metric][-1] for d in test_dataset_names]) \
+                    / len(test_dataset_names)
     for metric in best_val_res:
         if metric == 'cls':
             continue
