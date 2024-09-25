@@ -64,6 +64,8 @@ def get_args():
     parser.add_argument('--logsig_thresh', type=float, default=100)
     parser.add_argument('--logsig_loss_eff', type=float, default=0.1)
     parser.add_argument('--logsig_loss_func', type=str, default='kl')
+    parser.add_argument('--diversity_loss_func', type=str, default='triangular')
+    parser.add_argument('--diversity_loss_eff', type=float, default=0)
     parser.add_argument('--mono_sem_eff', type=float, default=0.01)
     parser.add_argument('--mono_sem_l1_eff', type=float, default=0.01)
     parser.add_argument('--mono_sem_align_func', type=str, default='cosine_simi')

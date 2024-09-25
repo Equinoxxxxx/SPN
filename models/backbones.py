@@ -843,9 +843,11 @@ class CustomTransformerEncoder1D(nn.Module):
         x:   (B 2 obslen nj) or (B obslen 4/5)
         '''
         self.attn_list = []
+        # sklt or social
         if len(x.size()) == 4:  # B 2 obslen nj --> # B 2 obslen*nj
             B, in_dim, obslen, nj = x.size()
-            x = x.view(B, in_dim, obslen*nj)
+            x = x.reshape(B, in_dim, obslen*nj)
+        # traj
         elif len(x.size()) == 3:
             x = x.permute(0, 2, 1)  # B obslen 4 --> B 4 obslen
 

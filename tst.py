@@ -18,8 +18,18 @@ from models.mytransformer import MyTransformerEncoder,MyTransformerEncoderLayer,
 from tools.visualize.visualize_seg_map import visualize_segmentation_map
 from torchvision import transforms
 from PIL import Image
-from tools.data.normalize import norm_imgs, recover_norm_imgs, img_mean_std_BGR
+from tools.data.normalize import norm_imgs, recover_norm_imgs, img_mean_std_BGR, sklt_local_to_global\
+    , sklt_global_to_local
 from tools.utils import save_model, seed_all
+from tools.visualize.visualize_1d_seq import vis_1d_seq, generate_colormap_legend
+
+from tools.datasets.TITAN import TITAN_dataset
+from tools.datasets.identify_sample import get_ori_img_path
+from tools.visualize.visualize_neighbor_bbox import visualize_neighbor_bbox
+from tools.visualize.visualize_skeleton import visualize_sklt_with_pseudo_heatmap
+from tools.data.normalize import recover_norm_imgs, img_mean_std_BGR, recover_norm_sklt, recover_norm_bbox
+from tools.data.resize_img import resize_image
+from get_args import get_args
 
 torch.backends.mha.set_fastpath_enabled(False)
 
@@ -83,26 +93,101 @@ class ToyDataset(torch.utils.data.Dataset):
 
 if __name__ == '__main__':
     seed_all(42)
-    parser = argparse.ArgumentParser(description='main')
-    parser.add_argument('--a', type=str, default='a')
-    parser.add_argument('--b', type=int, default=0)
+    # parser = argparse.ArgumentParser(description='main')
+    # parser.add_argument('--a', type=str, default='a')
+    # parser.add_argument('--b', type=int, default=0)
 
-    args = parser.parse_args()
+    # args = parser.parse_args()
     
-    # cur_crop_seg_root = '/home/y_feng/workspace6/datasets/BDD100k/bdd100k/extra/cropped_seg/person/ori_local/224w_by_224h/ped'
-    # cur_seg_oids = set(os.listdir(cur_crop_seg_root))
-    # cur_crop_img_root = '/home/y_feng/workspace6/datasets/BDD100k/bdd100k/extra/cropped_images/even_padded/224w_by_224h/ped'
-    # cur_crop_img_oids = set(os.listdir(cur_crop_img_root))
-    # cur_crop_ctx_root = '/home/y_feng/workspace6/datasets/BDD100k/bdd100k/extra/context/ori_local/224w_by_224h/ped'
-    # cur_crop_ctx_oids = set(os.listdir(cur_crop_ctx_root))
-    # print(f'cur_crop_seg - cur_crop_img: {cur_seg_oids - cur_crop_img_oids}')
-    # print(f'cur_crop_img - cur_crop_seg: {cur_crop_img_oids - cur_seg_oids}')
-    # print(f'cur_crop_ctx - cur_crop_img: {cur_crop_ctx_oids - cur_crop_img_oids}')
-    # print(f'cur_crop_img - cur_crop_ctx: {cur_crop_img_oids - cur_crop_ctx_oids}')
-    # oids_to_add = cur_crop_img_oids - cur_seg_oids
-    # oids_to_add.add('112811')
-    # with open('./oids_to_add_bdd100k.pkl', 'wb') as f:
-    #     pickle.dump(oids_to_add, f)
-    a = 0
-    a += np.array([1,2,3])
-    print(a)
+    # args = get_args()
+    # dataset = TITAN_dataset(sub_set='default_train', 
+    #                                         offset_traj=False,
+    #                                         img_norm_mode=args.img_norm_mode, 
+    #                                         target_color_order=args.model_color_order,
+    #                                         obs_len=args.obs_len, 
+    #                                         pred_len=args.pred_len, 
+    #                                         overlap_ratio=0.5, 
+    #                                         obs_fps=args.obs_fps,
+    #                                         recog_act=False,
+    #                                         multi_label_cross=False, 
+    #                                         act_sets=args.act_sets,
+    #                                         loss_weight='sklearn',
+    #                                         small_set=0.01,
+    #                                         resize_mode=args.resize_mode, 
+    #                                         modalities=args.modalities,
+    #                                         img_format=args.img_format,
+    #                                         sklt_format=args.sklt_format,
+    #                                         ctx_format=args.ctx_format,
+    #                                         traj_format=args.traj_format,
+    #                                         ego_format=args.ego_format,
+    #                                         augment_mode=args.augment_mode,
+    #                                         )
+    # d = dataset[0]
+    # set_id = d['set_id_int'].detach().numpy()
+    # vid_id = d['vid_id_int'].detach().numpy()
+    # img_nms = d['img_nm_int'].detach().numpy()
+    # obj_id = d['ped_id_int'].detach().numpy()
+    # dataset_name = 'TITAN'
+    # traj = d['obs_bboxes_unnormed'].detach().numpy()
+    # print(f'traj {traj}')
+    # if '0-1' in args.traj_format:
+    #     traj = recover_norm_bbox(traj, dataset_name)  # T 4 (int)
+    # traj = traj.astype(np.int32)
+    # # print(traj)
+    # neighbor_bbox = d['obs_neighbor_bbox'].int().detach().numpy() # K T 4
+    # K = neighbor_bbox.shape[0]
+    # weights = np.arange(K)
+    # bg_img_path = get_ori_img_path(dataset,
+    #                                 set_id=set_id,
+    #                                 vid_id=vid_id,
+    #                                 img_nm=img_nms[-1],
+    #                                 )
+    # bg_img = cv2.imread(bg_img_path)
+    # social_img = visualize_neighbor_bbox(bg_img,traj[-1],neighbor_bbox[:,-1], weights=weights)
+
+    # cv2.imwrite('social_img.jpg', social_img)
+
+
+
+
+    T = 5  # Number of frames
+    H, W = 384, 288  # Image dimensions
+    nj = 17  # Number of joints
+
+    # Generate random images
+    imgs = np.random.randint(0, 255, (T, H, W, 3), dtype=np.uint8)
+
+    # Generate random skeletons
+    sklts = torch.randint(0, min(H, W), (T, nj, 2))
+    sklts[0,:,0] = 80
+    sklts[0,:,1] = torch.arange(nj) / nj * H
+    sklts = sklts.int()
+    # print(f'sklts {sklts}')
+
+    # Generate random features
+    feats = torch.rand(T, nj).numpy() * nj
+    feats[0,:] = torch.arange(nj)
+    # print(f'feats {feats}')
+    # Generate random bounding boxes
+    bboxs = []
+    for t in range(T):
+        bbox = torch.tensor([0, 0, W, H]) * (t+1) / T
+        bbox = bbox.int()
+        bboxs.insert(0, bbox)
+    bboxs = torch.stack(bboxs).numpy()
+    # Define dataset name and save directory
+    dataset_name = 'PIE'
+    save_dir = 'test_output'
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Call the function
+    overlay_imgs, heatmaps = visualize_sklt_with_pseudo_heatmap(imgs, sklts, feats, bboxs, dataset_name, save_dir)
+    import pdb;pdb.set_trace()
+    # print(heatmaps)
+
+    # a = torch.arange(24).reshape(2,3,4)
+    # print(a)
+    # a[:,:,0] = 1
+    # print(a)
+    # a[0,:,1] = torch.arange(3)
+    # print(a)

@@ -4,7 +4,7 @@ from ..data.nusc_split import TRAIN_SC, VAL_SC
 from ..data.coord_transform import nusc_3dbbox_to_2dbbox
 from ..visualize.visualize_bbox import draw_box, draw_boxes_on_img
 from ..utils import makedir
-from ..data.normalize import img_mean_std_BGR, norm_imgs
+from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
 from .dataset_id import DATASET2ID
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
@@ -34,7 +34,7 @@ class NuscDataset(torch.utils.data.Dataset):
                  obs_fps=2,
                  recog_act=0,
                  tte=None,
-                 norm_traj=False,
+                 offset_traj=False,
                  min_h=72,
                  min_w=36,
                  min_vis_level=3,
@@ -70,7 +70,7 @@ class NuscDataset(torch.utils.data.Dataset):
         self._pred_len = self.pred_len * (self.seq_interval + 1)
         self.tte = tte
         self.overlap_ratio = overlap_ratio
-        self.norm_traj = norm_traj
+        self.offset_traj = offset_traj
         self.recog_act = recog_act
         self.min_h = min_h
         self.min_w = min_w
@@ -170,18 +170,28 @@ class NuscDataset(torch.utils.data.Dataset):
         return self.num_samples
     
     def __getitem__(self, idx):
-        obs_bbox = torch.tensor(self.samples['obs']['bbox_2d_normed'][idx]).float()
-        obs_bbox_unnormed = torch.tensor(self.samples['obs']['bbox_2d'][idx]).float()  # ltrb
-        pred_bbox = torch.tensor(self.samples['pred']['bbox_2d_normed'][idx]).float()
-        pred_bbox_unnormed = torch.tensor(self.samples['pred']['bbox_2d'][idx]).float()
-        obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float().unsqueeze(1)
+        obs_bbox_offset = copy.deepcopy(torch.tensor(self.samples['obs']['bbox_2d_normed'][idx]).float())
+        obs_bbox = copy.deepcopy(torch.tensor(self.samples['obs']['bbox_2d'][idx]).float())  # ltrb
+        pred_bbox_offset = copy.deepcopy(torch.tensor(self.samples['pred']['bbox_2d_normed'][idx]).float())
+        pred_bbox = copy.deepcopy(torch.tensor(self.samples['pred']['bbox_2d'][idx]).float())
+        obs_ego = copy.deepcopy(torch.tensor(self.samples['obs']['ego_motion'][idx]).float().unsqueeze(1))
         assert len(obs_ego.shape) == 2
         sce_id_int = torch.tensor(int(self.samples['obs']['sce_id'][idx][0]))
         ins_id_int = torch.tensor(int(float(self.samples['obs']['ins_id'][idx][0])))
         sam_id_int = torch.tensor(self.samples['obs']['sam_id'][idx])
-
+        
+        obs_bbox_ori = copy.deepcopy(obs_bbox)
+        pred_bbox_ori = copy.deepcopy(pred_bbox)
         # squeeze the coords
         if '0-1' in self.traj_format:
+            obs_bbox_offset[:, 0] /= self.img_size[1]
+            obs_bbox_offset[:, 2] /= self.img_size[1]
+            obs_bbox_offset[:, 1] /= self.img_size[0]
+            obs_bbox_offset[:, 3] /= self.img_size[0]
+            pred_bbox_offset[:, 0] /= self.img_size[1]
+            pred_bbox_offset[:, 2] /= self.img_size[1]
+            pred_bbox_offset[:, 1] /= self.img_size[0]
+            pred_bbox_offset[:, 3] /= self.img_size[0]
             obs_bbox[:, 0] /= self.img_size[1]
             obs_bbox[:, 2] /= self.img_size[1]
             obs_bbox[:, 1] /= self.img_size[0]
@@ -195,12 +205,14 @@ class NuscDataset(torch.utils.data.Dataset):
                   'vid_id_int': sce_id_int,  # int
                   'ped_id_int': ins_id_int,  # int
                   'img_nm_int': sam_id_int,
-                  'obs_bboxes': obs_bbox,
-                  'obs_bboxes_unnormed': obs_bbox_unnormed,
+                  'obs_bboxes': obs_bbox_offset,
+                  'obs_bboxes_unnormed': obs_bbox,
+                  'obs_bboxex_ori': obs_bbox_ori,
                   'obs_ego': obs_ego,
                   'pred_act': torch.tensor(-1),
-                  'pred_bboxes': pred_bbox,
-                  'pred_bboxes_unnormed': pred_bbox_unnormed,
+                  'pred_bboxes': pred_bbox_offset,
+                  'pred_bboxes_unnormed': pred_bbox,
+                  'pred_bboxex_ori': pred_bbox_ori,
                   'atomic_actions': torch.tensor(-1),
                   'simple_context': torch.tensor(-1),
                   'complex_context': torch.tensor(-1),  # (1,)
@@ -217,9 +229,10 @@ class NuscDataset(torch.utils.data.Dataset):
                   }
         if 'social' in self.modalities:
             relations, neighbor_bbox, neighbor_oid =\
-                  pad_neighbor([np.array(self.samples['obs']['neighbor_relations'][idx]).transpose(1,0,2),
-                                np.array(self.samples['obs']['neighbor_bbox_2d'][idx]).transpose(1,0,2),
-                                self.samples['obs']['neighbor_oid'][idx]],
+                  pad_neighbor([copy.deepcopy(np.array(self.samples['obs']['neighbor_relations'][idx]).transpose(1,0,2)),
+                                copy.deepcopy(np.array(self.samples['obs']['neighbor_bbox_2d'][idx]).transpose(1,0,2)),
+                                copy.deepcopy(self.samples['obs']['neighbor_oid'][idx])
+                                ],
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
@@ -279,6 +292,9 @@ class NuscDataset(torch.utils.data.Dataset):
             if 'coord' in self.sklt_format:
                 obs_skeletons = torch.from_numpy(sklts).float().permute(2, 0, 1)[:2]  # shape: (2, T, nj)
                 pred_skeletons = torch.from_numpy(pred_sklts).float().permute(2, 0, 1)[:2]
+                # add offset
+                obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
+                pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
                 if '0-1' in self.sklt_format:
                     obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
                     obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
@@ -385,7 +401,7 @@ class NuscDataset(torch.utils.data.Dataset):
                     for c in self.seg_cls:
                         crop_seg = crop_local_ctx(
                             torch.unsqueeze(ctx_segs[c][i], dim=0), 
-                            obs_bbox_unnormed[i], 
+                            obs_bbox_ori[i], 
                             self.ctx_size, 
                             interpo='nearest')  # 1 h w
                         crop_segs[c].append(crop_seg)
@@ -823,7 +839,7 @@ class NuscDataset(torch.utils.data.Dataset):
         print('---------------Normalize traj---------------')
         bboxes_2d_norm = copy.deepcopy(samples['bbox_2d'])
         bboxes_3d_norm = copy.deepcopy(samples['bbox_3d'])
-        if self.norm_traj:
+        if self.offset_traj:
             for i in range(len(bboxes_2d_norm)):
                 bboxes_2d_norm[i] = np.subtract(bboxes_2d_norm[i][:], 
                                                 bboxes_2d_norm[i][0]).tolist()

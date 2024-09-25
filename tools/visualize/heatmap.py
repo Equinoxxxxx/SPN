@@ -62,6 +62,7 @@ def visualize_featmap3d(featmap, ori_input, mode='mean', channel_weights=None, s
         feat_mean = np.mean(mask)
         mask = mask - np.amin(mask)
         mask = mask / (np.amax(mask) + 1e-8)
+        overlay_imgs = []
         for i in range(ori_input.shape[0]):
             img = ori_input[i]
             heatmap = cv2.applyColorMap(np.uint8(255*mask[i]), cv2.COLORMAP_JET)
@@ -69,7 +70,9 @@ def visualize_featmap3d(featmap, ori_input, mode='mean', channel_weights=None, s
             cv2.imwrite(os.path.join(save_dir,
                                      'feat_heatmap' + str(i) + '.png'),
                         heatmap)
-        return feat_mean, feat_max, feat_min
+            overlay_imgs.append(heatmap)
+        overlay_imgs = np.stack(overlay_imgs, axis=0) # T H W 3
+        return feat_mean, feat_max, feat_min, overlay_imgs, mask
     elif mode == 'separate':
         T1, H1, W1, C1 = featmap.shape
         featmap = torch.from_numpy(featmap).permute(3, 0, 1, 2).contiguous()  # C T1 H1 W1

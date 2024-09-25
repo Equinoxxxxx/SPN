@@ -12,7 +12,7 @@ import numpy as np
 from scipy import interpolate
 from torchvision.transforms import functional as TVF
 from ..data.preprocess import bdd100k_get_vidnm2vidid
-from ..data.normalize import img_mean_std_BGR, norm_imgs
+from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
 from .dataset_id import DATASET2ID, ID2DATASET
@@ -54,7 +54,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                  subsets='train_val',
                  dataset_root=dataset_root,
                  obs_len=4, pred_len=4, overlap_ratio=0.5,
-                 norm_traj=False,
+                 offset_traj=False,
                  obs_fps=2,
                  target_color_order='BGR', img_norm_mode='torch',
                  small_set=0,
@@ -88,7 +88,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
         self.pred_len = pred_len
         self.seq_interval = self.fps // obs_fps - 1
         self.overlap_ratio = overlap_ratio
-        self.norm_traj = norm_traj
+        self.norm_traj = offset_traj
         self.target_color_order = target_color_order
         self.img_norm_mode = img_norm_mode
         self.img_mean, self.img_std = img_mean_std_BGR(self.img_norm_mode)
@@ -190,17 +190,27 @@ class BDD100kDataset(torch.utils.data.Dataset):
         return self.num_samples
     
     def __getitem__(self, idx):
-        obs_bbox = torch.tensor(self.samples['obs']['bbox_normed'][idx]).float()
-        obs_bbox_unnormed = torch.tensor(self.samples['obs']['bbox'][idx]).float()
-        pred_bbox = torch.tensor(self.samples['pred']['bbox_normed'][idx]).float()
-        pred_bbox_unnormed = torch.tensor(self.samples['pred']['bbox'][idx]).float()
-        obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float().unsqueeze(1)
+        obs_bbox_offset = copy.deepcopy(torch.tensor(self.samples['obs']['bbox_normed'][idx]).float())
+        obs_bbox = copy.deepcopy(torch.tensor(self.samples['obs']['bbox'][idx]).float())
+        pred_bbox_offset = copy.deepcopy(torch.tensor(self.samples['pred']['bbox_normed'][idx]).float())
+        pred_bbox = copy.deepcopy(torch.tensor(self.samples['pred']['bbox'][idx]).float())
+        obs_ego = copy.deepcopy(torch.tensor(self.samples['obs']['ego_motion'][idx]).float().unsqueeze(1))
         assert len(obs_ego.shape) == 2
         vid_id_int = torch.tensor(int(self.samples['obs']['vid_id'][idx][0]))
         obj_id_int = torch.tensor(int(float(self.samples['obs']['obj_id'][idx][0])))
         img_id_int = torch.tensor(self.samples['obs']['img_id_int'][idx])
+        obs_bbox_ori = copy.deepcopy(obs_bbox)
+        pred_bbox_ori = copy.deepcopy(pred_bbox)
         # squeeze the coords
         if '0-1' in self.traj_format:
+            obs_bbox_offset[:, 0] /= self.img_size[1]
+            obs_bbox_offset[:, 2] /= self.img_size[1]
+            obs_bbox_offset[:, 1] /= self.img_size[0]
+            obs_bbox_offset[:, 3] /= self.img_size[0]
+            pred_bbox_offset[:, 0] /= self.img_size[1]
+            pred_bbox_offset[:, 2] /= self.img_size[1]
+            pred_bbox_offset[:, 1] /= self.img_size[0]
+            pred_bbox_offset[:, 3] /= self.img_size[0]
             obs_bbox[:, 0] /= self.img_size[1]
             obs_bbox[:, 2] /= self.img_size[1]
             obs_bbox[:, 1] /= self.img_size[0]
@@ -214,12 +224,14 @@ class BDD100kDataset(torch.utils.data.Dataset):
                   'vid_id_int': vid_id_int,  # int
                   'ped_id_int': obj_id_int,  # int
                   'img_nm_int': img_id_int,
-                  'obs_bboxes': obs_bbox,
-                  'obs_bboxes_unnormed': obs_bbox_unnormed,
+                  'obs_bboxes': obs_bbox_offset,
+                  'obs_bboxes_unnormed': obs_bbox,
+                  'obs_bboxes_ori': obs_bbox_ori,
                   'obs_ego': obs_ego,
                   'pred_act': torch.tensor(-1),
-                  'pred_bboxes': pred_bbox,
-                  'pred_bboxes_unnormed': pred_bbox_unnormed,
+                  'pred_bboxes': pred_bbox_offset,
+                  'pred_bboxes_unnormed': pred_bbox,
+                  'pred_bboxes_ori': pred_bbox_ori,
                   'atomic_actions': torch.tensor(-1),
                   'simple_context': torch.tensor(-1),
                   'complex_context': torch.tensor(-1),  # (1,)
@@ -236,9 +248,10 @@ class BDD100kDataset(torch.utils.data.Dataset):
                   }
         if 'social' in self.modalities:
             relations, neighbor_bbox, neighbor_oid =\
-                  pad_neighbor([np.array(self.samples['obs']['neighbor_relations'][idx]).transpose(1,0,2),
-                                np.array(self.samples['obs']['neighbor_bbox'][idx]).transpose(1,0,2),
-                                self.samples['obs']['neighbor_oid'][idx]],
+                  pad_neighbor([copy.deepcopy(np.array(self.samples['obs']['neighbor_relations'][idx]).transpose(1,0,2)),
+                                copy.deepcopy(np.array(self.samples['obs']['neighbor_bbox'][idx]).transpose(1,0,2)),
+                                copy.deepcopy(self.samples['obs']['neighbor_oid'][idx])
+                                ],
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
@@ -294,7 +307,10 @@ class BDD100kDataset(torch.utils.data.Dataset):
             pred_sklts = np.stack(pred_sklts, axis=0)  # T, ...
             if 'coord' in self.sklt_format:
                 obs_skeletons = torch.from_numpy(sklts).float().permute(2, 0, 1)[:2]  # shape: (2, T, nj)
-                pred_skeletons = torch.from_numpy(pred_sklts).float().permute(2, 0, 1)[:2]
+                pred_skeletons = torch.from_numpy(pred_sklts).float().permute(2, 0, 1)[:2] # (2, T, nj)
+                # add offset
+                obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
+                pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
                 if '0-1' in self.sklt_format:
                     obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
                     obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
@@ -402,7 +418,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                     for c in self.seg_cls:
                         crop_seg = crop_local_ctx(
                             torch.unsqueeze(ctx_segs[c][i], dim=0), 
-                            obs_bbox_unnormed[i], 
+                            obs_bbox_ori[i], 
                             self.ctx_size, 
                             interpo='nearest')  # 1 h w
                         crop_segs[c].append(crop_seg)

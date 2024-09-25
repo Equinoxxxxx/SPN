@@ -20,7 +20,7 @@ from .pie_data import PIE
 from .jaad_data import JAAD
 from ..utils import mapping_20, makedir, ltrb2xywh, coord2pseudo_heatmap, cls_weights
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
-from ..data.normalize import img_mean_std_BGR, norm_imgs
+from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global
 from ..general import HiddenPrints
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
 from .dataset_id import DATASET2ID, ID2DATASET
@@ -34,7 +34,7 @@ from config import dataset_root
 class PIEDataset(Dataset):
     def __init__(self, 
                  dataset_name='PIE', 
-                 normalize_pos=False, 
+                 offset_traj=False, 
                  img_norm_mode='torch', 
                  data_split_type='default',
                  seq_type='crossing', 
@@ -70,7 +70,7 @@ class PIEDataset(Dataset):
         self.tte = tte
         self.recog_act = recog_act
         self.subset = subset
-        self.normalize_pos = normalize_pos
+        self.offset_traj = offset_traj
         self.img_norm_mode = img_norm_mode
         self.target_color_order = target_color_order
         self.img_mean, self.img_std = img_mean_std_BGR(self.img_norm_mode)  # BGR
@@ -113,7 +113,7 @@ class PIEDataset(Dataset):
         # data opts
         if dataset_name == 'PIE':
             self.root_path = os.path.join(dataset_root, 'PIE_dataset')
-            self.data_opts = {'normalize_bbox': normalize_pos,
+            self.data_opts = {'normalize_bbox': offset_traj,
                          'fstride': 1,
                          'sample_type': 'all',
                          'height_rng': [0, float('inf')],
@@ -318,10 +318,10 @@ class PIEDataset(Dataset):
     def __getitem__(self, idx):
         # print('-----------getting item-----------')
         # import pdb; pdb.set_trace()
-        obs_bbox = torch.tensor(self.samples['obs_bbox_normed'][idx]).float()  # ltrb
-        obs_bboxes_unnormed = torch.tensor(self.samples['obs_bbox'][idx]).float()  # ltrb
-        pred_bbox = torch.tensor(self.samples['pred_bbox_normed'][idx]).float()
-        pred_bboxes_unnormed = torch.tensor(self.samples['pred_bbox'][idx]).float()
+        obs_bbox_offset = copy.deepcopy(torch.tensor(self.samples['obs_bbox_normed'][idx]).float())  # ltrb
+        obs_bbox = copy.deepcopy(torch.tensor(self.samples['obs_bbox'][idx]).float())  # ltrb
+        pred_bbox_offset = copy.deepcopy(torch.tensor(self.samples['pred_bbox_normed'][idx]).float())
+        pred_bbox = copy.deepcopy(torch.tensor(self.samples['pred_bbox'][idx]).float())
         target = torch.tensor(self.samples['target'][idx][-1])
         obs_ego = \
             torch.tensor(self.samples['obs_ego'][idx]).float().reshape(-1, 1)
@@ -329,9 +329,18 @@ class PIEDataset(Dataset):
         set_id_int = self.samples['obs_set_id_int'][idx][-1] if self.dataset_name == 'PIE' else 0
 
         # obs_ego = torch.cat([obs_ego, torch.zeros(obs_ego.size())], dim=-1)
-
+        obs_bbox_ori = copy.deepcopy(obs_bbox)
+        pred_bbox_ori = copy.deepcopy(pred_bbox)
         # normalize the coordinates
         if '0-1' in self.traj_format:
+            obs_bbox_offset[:, 0] /= self.img_size[1]
+            obs_bbox_offset[:, 2] /= self.img_size[1]
+            obs_bbox_offset[:, 1] /= self.img_size[0]
+            obs_bbox_offset[:, 3] /= self.img_size[0]
+            pred_bbox_offset[:, 0] /= self.img_size[1]
+            pred_bbox_offset[:, 2] /= self.img_size[1]
+            pred_bbox_offset[:, 1] /= self.img_size[0]
+            pred_bbox_offset[:, 3] /= self.img_size[0]
             obs_bbox[:, 0] /= self.img_size[1]
             obs_bbox[:, 2] /= self.img_size[1]
             obs_bbox[:, 1] /= self.img_size[0]
@@ -346,12 +355,14 @@ class PIEDataset(Dataset):
                 'vid_id_int': torch.tensor(self.samples['obs_vid_id_int'][idx][-1]),  # int
                 'ped_id_int': torch.tensor(self.samples['obs_ped_id_int'][idx][-1]),  # int out of (set id, vid id, ped id)
                 'img_nm_int': torch.tensor(self.samples['obs_img_nm_int'][idx]),  # obs_len,
-                'obs_bboxes':obs_bbox, # obslen, 4
-                'obs_bboxes_unnormed': obs_bboxes_unnormed,
+                'obs_bboxes':obs_bbox_offset, # obslen, 4
+                'obs_bboxes_unnormed': obs_bbox,
+                'obs_bboxes_ori': obs_bbox_ori,
                 'obs_ego': obs_ego,  # shape: obs len, 1
                 'pred_act': target,   # int
-                'pred_bboxes': pred_bbox,   # shape: [pred_len, 4]
-                'pred_bboxes_unnormed': pred_bboxes_unnormed,
+                'pred_bboxes': pred_bbox_offset,   # shape: [pred_len, 4]
+                'pred_bboxes_unnormed': pred_bbox,
+                'pred_bboxes_ori': pred_bbox_ori,
                 'atomic_actions': torch.tensor(0),
                 'simple_context': torch.tensor(0),
                 'complex_context': torch.tensor(0),  # (1,)
@@ -369,9 +380,10 @@ class PIEDataset(Dataset):
 
         if 'social' in self.modalities:
             relations, neighbor_bbox, neighbor_oid =\
-                  pad_neighbor([np.array(self.samples['obs_neighbor_relations'][idx]).transpose(1,0,2),
-                                np.array(self.samples['obs_neighbor_bbox'][idx]).transpose(1,0,2),
-                                self.samples['obs_neighbor_oid'][idx]],
+                  pad_neighbor([copy.deepcopy(np.array(self.samples['obs_neighbor_relations'][idx]).transpose(1,0,2)),
+                                copy.deepcopy(np.array(self.samples['obs_neighbor_bbox'][idx]).transpose(1,0,2)),
+                                copy.deepcopy(self.samples['obs_neighbor_oid'][idx])
+                                ],
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
@@ -403,6 +415,9 @@ class PIEDataset(Dataset):
                 try:
                     obs_skeletons = torch.from_numpy(coords).float().permute(2, 0, 1)  # 2, T, 17
                     pred_skeletons = torch.from_numpy(pred_coords).float().permute(2, 0, 1)
+                    # add offset
+                    obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
+                    pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
                     if '0-1' in self.sklt_format:
                         obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
                         obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
@@ -476,9 +491,9 @@ class PIEDataset(Dataset):
                         imgs.append(cv2.imread(img_path))
                 else:
                     obs_img_paths = self.samples['obs_image_paths'][idx]
-                    obs_bbox = self.samples['obs_bbox'][idx]
+                    obs_bbox_offset = self.samples['obs_bbox'][idx]
                     imgs = []
-                    for path, bbox in zip(obs_img_paths, obs_bbox):
+                    for path, bbox in zip(obs_img_paths, obs_bbox_offset):
                         imgs.append(self.load_cropped_image(path, bbox))
                 # (T, H, W, C) -> (C, T, H, W)
                 imgs = np.stack(imgs, axis=0)
@@ -521,9 +536,8 @@ class PIEDataset(Dataset):
             # print('-----------getting img-----------')
             if self.crop_from_ori:
                 obs_img_paths = self.samples['obs_image_paths'][idx]
-                obs_bbox = self.samples['obs_bbox'][idx]
                 imgs = []
-                for path, bbox in zip(obs_img_paths, obs_bbox):
+                for path, bbox in zip(obs_img_paths, obs_bbox_ori):
                     imgs.append(self.load_cropped_image(path, bbox))
             else:
                 pid = self.samples['obs_pid'][idx][0][0]
@@ -650,10 +664,10 @@ class PIEDataset(Dataset):
                 crop_imgs = []
                 crop_segs = {c:[] for c in self.seg_cls}
                 for i in range(ctx_imgs.size(1)):  # T
-                    crop_img = crop_local_ctx(ctx_imgs[:, i], obs_bboxes_unnormed[i], self.ctx_size)  # 3 h w
+                    crop_img = crop_local_ctx(ctx_imgs[:, i], obs_bbox_ori[i], self.ctx_size)  # 3 h w
                     crop_imgs.append(crop_img)
                     for c in self.seg_cls:
-                        crop_seg = crop_local_ctx(torch.unsqueeze(ctx_segs[c][i], dim=0), obs_bboxes_unnormed[i], self.ctx_size)  # 1 h w
+                        crop_seg = crop_local_ctx(torch.unsqueeze(ctx_segs[c][i], dim=0), obs_bbox_ori[i], self.ctx_size)  # 1 h w
                         crop_segs[c].append(crop_seg)
                 crop_imgs = torch.stack(crop_imgs, dim=1)  # 3Thw
                 all_seg = []
@@ -1080,7 +1094,7 @@ class PIEDataset(Dataset):
         print('---------------Normalize traj---------------')
         normed_samples = copy.deepcopy(samples)
         
-        if self.normalize_pos:
+        if self.offset_traj:
             for i in range(len(normed_samples['bbox'])):
                 normed_samples['bbox'][i] = np.subtract(normed_samples['bbox'][i][:],
                                                         normed_samples['bbox'][i][0]).tolist()

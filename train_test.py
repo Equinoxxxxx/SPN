@@ -9,6 +9,7 @@ from tools.loss.classification_loss import FocalLoss3
 from tools.loss.mse_loss import sgnet_rmse_loss, calc_mse
 from tools.loss.cvae_loss import sgnet_cvae_loss, calc_stoch_mse
 from tools.loss.mono_sem_loss import calc_topk_monosem, calc_mono_sem_align_loss
+from tools.loss.diversity_loss import calc_diversity_loss
 from tools.metrics import calc_acc, calc_auc, calc_confusion_matrix, calc_f1, \
     calc_mAP, calc_precision, calc_recall
 from models.SGNet import accumulate_traj, traj_to_sgnet_target
@@ -76,9 +77,11 @@ def train_test_epoch(args,
     total_sgnet_dec_loss = 0
     total_sgnet_cvae_loss = 0
     total_logsig_loss = 0
+    total_diversity_loss = 0
     total_mono_sem_loss = 0
     total_mono_sem_l1_loss = 0
     total_mono_sem_align_loss = 0
+    total_sparsity = 0
     # targets and logits for whole epoch
     targets_e = {}
     logits_e = {}
@@ -142,7 +145,7 @@ def train_test_epoch(args,
                 goal_loss = traj_loss_func(all_goal_traj, target_traj)
                 # pred_traj = accumulate_traj(inputs['traj'], all_dec_traj)  # B predlen K 4
                 traj_mse = calc_stoch_mse(pred_traj,  # B predlen K 4
-                                          gt_traj, # B
+                                          gt_traj, # B predlen 4
                                           loss_params['stoch_mse_type'])
                 loss = goal_loss + cvae_loss + KLD_loss.mean()
                 # add to total loss
@@ -188,6 +191,7 @@ def train_test_epoch(args,
                 total_pose_loss += loss.item()
             elif model_name in ('PCPA', 'ped_graph'):
                 out = model(inputs)
+                loss = 0
                 try:
                     logits = out['cls_logits']
                 except:
@@ -268,6 +272,11 @@ def train_test_epoch(args,
                 sparsity, topk_indices = calc_topk_monosem(proto_simi, 
                                                             args.topk,
                                                             args.topk_metric)
+                total_sparsity += sparsity.mean().item()
+                if loss_params['diversity_loss_eff'] > 0:
+                    diversity_loss = calc_diversity_loss(model.module.proto_enc.weight)
+                    total_diversity_loss += diversity_loss.item()
+                    loss = loss + diversity_loss * loss_params['diversity_loss_eff']
                 if loss_params['mono_sem_eff'] > 0:
                     mono_sem_loss = -sparsity.mean()
                     total_mono_sem_loss += mono_sem_loss.item()
@@ -310,11 +319,12 @@ def train_test_epoch(args,
                 display_dict['logit'] = [round(logits['cross'][0, 0].item(), 4), round(logits['cross'][0, 1].item(), 4)]
                 display_dict['avg logit'] = [round(mean_logit[0].item(), 4), round(mean_logit[1].item(), 4)]
         tbar.set_postfix(display_dict)
-        del inputs
+        # del inputs
+        del data
         if is_train:
             del loss
         torch.cuda.empty_cache()
-        if n_iter%50 == 0:
+        if n_iter%50 == 0 or True:
             print(f'cur mem allocated: {torch.cuda.memory_allocated(device)}')
 
     # calc metric
@@ -391,6 +401,9 @@ def train_test_epoch(args,
     if loss_params['logsig_loss_eff'] > 0:
         res['logsig_loss'] = total_logsig_loss / (n_iter+1)
         log(f'\t logsig loss: {total_logsig_loss / (n_iter+1)}')
+    if loss_params['diversity_loss_eff'] > 0:
+        res['diversity_loss'] = total_diversity_loss / (n_iter+1)
+        log(f'\t diversity loss: {total_diversity_loss / (n_iter+1)}')
     if loss_params['mono_sem_eff'] > 0:
         res['mono_sem_loss'] = total_mono_sem_loss / (n_iter+1)
         log(f'\t mono_sem_loss: {total_mono_sem_loss / (n_iter+1)}')
@@ -400,5 +413,7 @@ def train_test_epoch(args,
     if loss_params['mono_sem_align_eff'] > 0:
         res['mono_sem_align_loss'] = total_mono_sem_align_loss / (n_iter+1)
         log(f'\t mono_sem_align_loss: {total_mono_sem_align_loss / (n_iter+1)}')
+    if model_name == 'pedspace':
+        log(f'\t mean top k relative var: {total_sparsity / (n_iter+1)}')
     log('\n')
     return res

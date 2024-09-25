@@ -1,4 +1,10 @@
-
+DATASET_TO_IMG_SIZE = {
+        'TITAN': (1520, 2704),
+        'PIE': (1080, 1920),
+        'JAAD': (1080, 1920),
+        'nuscenes': (900, 1600),
+        'bdd100k': (720, 1280),
+    }
 
 def img_mean_std_BGR(norm_mode):
     # BGR order
@@ -63,3 +69,76 @@ def recover_norm_imgs(imgs, means, stds):
 
     return imgs
 
+def norm_sklt(sklt, dataset_name):
+    '''
+    sklt: 2 (T nj)
+    '''
+    sklt[0] = sklt[0] / DATASET_TO_IMG_SIZE[dataset_name][1]
+    sklt[1] = sklt[1] / DATASET_TO_IMG_SIZE[dataset_name][0]
+
+    return sklt
+
+def recover_norm_sklt(sklt, dataset_name):
+    '''
+    sklt: tensor 2 (T nj) (xy)
+    '''
+    sklt[0] = sklt[0] * DATASET_TO_IMG_SIZE[dataset_name][1]
+    sklt[1] = sklt[1] * DATASET_TO_IMG_SIZE[dataset_name][0]
+
+    return sklt
+
+def sklt_local_to_global(sklt, bbox, sklt_img_size=(384,288)):
+    '''
+    sklt: 2 T nj
+    bbox: T 4 (ltrb)
+    '''
+    ys = (bbox[:, 1] + bbox[:, 3]) / 2 # T
+    xs = (bbox[:, 0] + bbox[:, 2]) / 2 # T
+    hs = bbox[:, 3] - bbox[:, 1] # T
+    ws = bbox[:, 2] - bbox[:, 0] # T
+    
+    sklt[1] = (sklt[1]/sklt_img_size[0]-0.5) * hs[:, None] + ys[:, None]
+    sklt[0] = (sklt[0]/sklt_img_size[1]-0.5) * ws[:, None] + xs[:, None]
+
+    return sklt
+
+def sklt_global_to_local(sklt, bbox, sklt_img_size=(384,288)):
+    '''
+    sklt: 2 T nj
+    bbox: T 4 (ltrb)
+    '''
+    xs = (bbox[:, 0] + bbox[:, 2]) / 2 # T
+    ys = (bbox[:, 1] + bbox[:, 3]) / 2 # T
+    ws = bbox[:, 2] - bbox[:, 0] # T
+    hs = bbox[:, 3] - bbox[:, 1] # T
+    
+    if 0 in hs or 0 in ws or any(hs < 0) or any(ws < 0):
+        print(f'negtive hs or ws')
+        import pdb;pdb.set_trace()
+        raise ValueError(hs, ws)
+    sklt[1] = (sklt[1] - ys[:, None]) / hs[:, None] * sklt_img_size[0] + sklt_img_size[0]/2
+    sklt[0] = (sklt[0] - xs[:, None]) / ws[:, None] * sklt_img_size[1] + sklt_img_size[1]/2
+
+    return sklt
+
+def norm_bbox(bbox, dataset_name):
+    '''
+    bbox: T 4 (ltrb)
+    '''
+    bbox[:, 0] = bbox[:, 0] / DATASET_TO_IMG_SIZE[dataset_name][1]
+    bbox[:, 1] = bbox[:, 1] / DATASET_TO_IMG_SIZE[dataset_name][0]
+    bbox[:, 2] = bbox[:, 2] / DATASET_TO_IMG_SIZE[dataset_name][1]
+    bbox[:, 3] = bbox[:, 3] / DATASET_TO_IMG_SIZE[dataset_name][0]
+
+    return bbox
+
+def recover_norm_bbox(bbox, dataset_name):
+    '''
+    bbox: torch.tensor T 4
+    '''
+    bbox[:, 0] = bbox[:, 0] * DATASET_TO_IMG_SIZE[dataset_name][1]
+    bbox[:, 1] = bbox[:, 1] * DATASET_TO_IMG_SIZE[dataset_name][0]
+    bbox[:, 2] = bbox[:, 2] * DATASET_TO_IMG_SIZE[dataset_name][1]
+    bbox[:, 3] = bbox[:, 3] * DATASET_TO_IMG_SIZE[dataset_name][0]
+
+    return bbox

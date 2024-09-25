@@ -2,7 +2,7 @@ from ..datasets.PIE_JAAD import PIEDataset
 from ..datasets.TITAN import TITAN_dataset
 from ..datasets.nuscenes_dataset import NuscDataset
 from ..datasets.bdd100k import BDD100kDataset
-from ..datasets.identify_sample import get_img_path
+from ..datasets.identify_sample import get_ori_img_path
 from ..visualize.visualize_bbox import draw_boxes_on_img
 import os
 import cv2
@@ -219,7 +219,7 @@ def check_neighbor_bbox(dataset_name='TITAN',
                       augment_mode='none',
                       tte=tte,
                       recog_act=0,
-                      normalize_pos=0,
+                      offset_traj=0,
                       speed_unit='m/s',
                       small_set=small_set,
                       )
@@ -364,7 +364,7 @@ def vis_neighbor_bbox(dataset_name='TITAN',
                       augment_mode='none',
                       tte=None,
                       recog_act=0,
-                      normalize_pos=0,
+                      offset_traj=0,
                       speed_unit='m/s',
                       small_set=small_set,
                       )
@@ -399,7 +399,7 @@ def vis_neighbor_bbox(dataset_name='TITAN',
     vid_id = int(sample['vid_id_int'].item())
     img_nm = sample['img_nm_int'][t].item()
     print('img nms', sample['img_nm_int'])
-    img_path = get_img_path(dataset,
+    img_path = get_ori_img_path(dataset,
                             set_id=set_id,
                             vid_id=vid_id,
                             img_nm=img_nm)

@@ -130,7 +130,7 @@ def pad_neighbor(neighbor_data,
                 max_n_neighbor,
                 eps=1e-5):
     '''
-    neighbor_data: list[ndarray K (T 4(5))]
+    neighbor_data: list[ndarray K (T) (4/5)]
     '''
     
     n_all = neighbor_data[0].shape[0]

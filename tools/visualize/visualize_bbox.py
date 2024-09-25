@@ -2,13 +2,15 @@ import numpy as np
 import cv2
 
 
-
-
 def draw_box(img, box):
+    '''
+    img: ndarray H W 3
+    box: ndarray 4 (ltrb)
+    '''
     img = cv2.rectangle(img=img, pt1=(int(box[0]), int(box[1])), pt2=(int(box[2]), int(box[3])), color=(0, 0, 255), thickness=2)
     return img
 
-def draw_boxes_on_img(img, traj_seq, color='b', interval=4, ids=None):
+def draw_boxes_on_img(img, traj_seq, color='b', interval=1, ids=None):
     '''
     img: ndarray H W 3
     traj_seq: ndarray T 4 (ltrb)
@@ -29,10 +31,5 @@ def draw_boxes_on_img(img, traj_seq, color='b', interval=4, ids=None):
             img = cv2.putText(img, text=str(int(ids[i])), org=xy, fontFace=font, fontScale=0.5, color=(0,0,255),thickness=2)
     return img
 
-def draw_skeleton_on_img(img, skeleton):
-    '''
-    img: ndarray H W 3
-
-    '''
 
 

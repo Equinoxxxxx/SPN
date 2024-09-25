@@ -4,6 +4,10 @@ import numpy as np
 import torchvision
 import ffmpeg
 
+from ..data.normalize import norm_imgs, recover_norm_imgs, \
+    img_mean_std_BGR, sklt_local_to_global, sklt_global_to_local
+from ..data.get_skeletons import generate_one_pseudo_heatmap
+
 
 def joints_dict():
     joints = {
@@ -188,6 +192,52 @@ def draw_points_and_skeleton(image, points, skeleton, points_color_palette='tab2
     image = draw_points(image, points, color_palette=points_color_palette, palette_samples=points_palette_samples,
                         confidence_threshold=confidence_threshold)
     return image
+
+
+def visualize_sklt_with_pseudo_heatmap(imgs, sklts, feats, bboxs, dataset_name, save_dir):
+    '''
+    imgs: ndarray T H W C
+    sklts: tensor T nj 2
+    feats:  T nj
+    bboxs:  T 4
+    '''
+    dataset_to_img_size = {
+        'TITAN': (1520, 2704),
+        'PIE': (1080, 1920),
+        'JAAD': (1080, 1920),
+        'nuscenes': (900, 1600),
+        'bdd100k': (720, 1280),
+    }
+    H, W = dataset_to_img_size[dataset_name]
+    T, h, w, _ = imgs.shape
+    nj = feats.shape[1]
+    sklt_loc = sklt_global_to_local(sklts.permute(2,0,1).float(), bboxs.astype(np.float32)) # 2 T nj
+    sklt_loc = sklt_loc.permute(1,2,0).int().cpu().numpy() # T nj 2
+    heatmaps = []
+    for t in range(T):
+        img = imgs[t]
+        sklt = sklt_loc[t]
+        feat = feats[t]
+        heatmap = generate_one_pseudo_heatmap(h, w, sklt, feat, sigma=w//40) # h w
+        heatmap = np.expand_dims(heatmap, axis=-1) # h w 1
+        heatmaps.append(heatmap)
+    heatmaps = np.stack(heatmaps, axis=0) # T h w 1
+    # max min norm
+    heatmaps = heatmaps - np.amin(heatmaps)
+    heatmaps = heatmaps / (np.amax(heatmaps) + 1e-8)
+    print(np.amin(heatmaps), np.amax(heatmaps), np.argmax(heatmaps))
+    print(sklts)
+    overlay_imgs = []
+    for t in range(T):
+        img = imgs[t]
+        heatmap = cv2.applyColorMap(np.uint8(heatmaps[t]*255), cv2.COLORMAP_JET)
+        overlay = 0.3*heatmap + 0.5*img
+        cv2.imwrite(f'{save_dir}/frame_{t}.png', overlay)
+        overlay_imgs.append(overlay)
+    return overlay_imgs, heatmaps
+    
+
+
 
 
 if __name__ == '__main__':

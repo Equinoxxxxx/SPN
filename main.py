@@ -84,7 +84,7 @@ def construct_data_loader(args, log):
             for name in datasets[stage][subset]:
                 if name == 'TITAN':
                     cur_set = TITAN_dataset(sub_set='default_'+_subset, 
-                                            norm_traj=False,
+                                            offset_traj=False,
                                             img_norm_mode=args.img_norm_mode, 
                                             target_color_order=args.model_color_order,
                                             obs_len=args.obs_len, 
@@ -127,7 +127,7 @@ def construct_data_loader(args, log):
                                         small_set=_small_set,
                                         tte=args.tte,
                                         recog_act=False,
-                                        normalize_pos=False,
+                                        offset_traj=False,
                                         augment_mode=args.augment_mode)
                     if subset in ('test', 'val'):
                         cur_set.tte = args.test_tte
@@ -194,14 +194,16 @@ def construct_data_loader(args, log):
                                         batch_size=_batch_size, 
                                         shuffle=args.shuffle,
                                         num_workers=args.dataloader_workers,
-                                        pin_memory=True)
+                                        pin_memory=True,
+                                        drop_last=True)
         )
         val_loaders.append(
             [torch.utils.data.DataLoader(val_sets[stage][i], 
                                         batch_size=_batch_size, 
                                         shuffle=args.shuffle,
                                         num_workers=args.dataloader_workers,
-                                        pin_memory=True
+                                        pin_memory=True,
+                                        drop_last=True
                                         ) for i in range(len(val_sets[stage]))]
         )
         test_loaders.append(
@@ -209,7 +211,8 @@ def construct_data_loader(args, log):
                                         batch_size=_batch_size, 
                                         shuffle=args.shuffle,
                                         num_workers=args.dataloader_workers,
-                                        pin_memory=True
+                                        pin_memory=True,
+                                        drop_last=True
                                         ) for i in range(len(test_sets[stage]))]
         )
     return train_loaders, val_loaders, test_loaders
@@ -221,7 +224,7 @@ def construct_model(args, device):
                      ctx_bb_nm=args.ctx_backbone_name,
                      proj_norm=args.proj_norm,
                      proj_actv=args.proj_actv,
-                     pretrain=True,
+                     pretrain=False,
                      act_sets=args.act_sets,
                      proj_dim=args.proj_dim,
                      )
@@ -494,6 +497,7 @@ def main(rank, world_size, args):
             'pose_mse':[],
             'contrast_loss':[],
             'logsig_loss':[],
+            'diversity_loss':[],
             'mono_sem_loss': [],
             'mono_sem_l1_loss': [],
             'mono_sem_align_loss': [],
@@ -530,6 +534,8 @@ def main(rank, world_size, args):
         'logsig_loss_func': args.logsig_loss_func,
         'logsig_loss_eff':args.logsig_loss_eff,
         'logsig_thresh':args.logsig_thresh,
+        'diversity_loss_func': args.diversity_loss_func,
+        'diversity_loss_eff': args.diversity_loss_eff,
         'mono_sem_eff': args.mono_sem_eff,
         'mono_sem_l1_eff': args.mono_sem_l1_eff,
         'mono_sem_align_func': args.mono_sem_align_func,
@@ -545,6 +551,8 @@ def main(rank, world_size, args):
         'logsig_loss_func': args.logsig_loss_func,
         'logsig_loss_eff': args.logsig_loss_eff,
         'logsig_thresh': args.logsig_thresh,
+        'diversity_loss_func': args.diversity_loss_func,
+        'diversity_loss_eff': args.diversity_loss_eff,
         'mono_sem_eff': args.mono_sem_eff,
         'mono_sem_l1_eff': args.mono_sem_l1_eff,
         'mono_sem_align_func': args.mono_sem_align_func,
@@ -669,6 +677,7 @@ def main(rank, world_size, args):
     if args.pose_mse_eff[1] > 0:
         best_val_res['pose_mse'] = float('inf')
     if args.cls_eff[1] > 0:
+        best_val_res['cls'] = {}
         for k in args.act_sets:
             best_val_res['cls'][k] = {'acc':0,
                                     'auc':0,

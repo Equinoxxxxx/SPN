@@ -115,8 +115,6 @@ def check_imgnm_to_objid(dataset_name):
                                   (obj_type, ins_id, sam_id))
         print(f'num img {n_img}')
 
-def get_cropped_images(datasets):
-    pass
 
 
 if __name__ == '__main__':

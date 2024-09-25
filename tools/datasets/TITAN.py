@@ -21,7 +21,7 @@ from .jaad_data import JAAD
 from ..utils import makedir
 from ..utils import mapping_20, ltrb2xywh, coord2pseudo_heatmap, TITANclip_txt2list, cls_weights
 from ..utils import get_random_idx
-from ..data.normalize import img_mean_std_BGR, norm_imgs
+from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
 from torchvision.transforms import functional as TVF
 from .dataset_id import DATASET2ID, ID2DATASET
@@ -238,7 +238,7 @@ class TITAN_dataset(Dataset):
     def __init__(self,
                  sub_set='default_train',
                  track_save_path='',
-                 norm_traj=False,
+                 offset_traj=False,
                  neighbor_mode='last_frame',
                  obs_len=4, pred_len=4, overlap_ratio=0.5, recog_act=0,
                  obs_fps=2,
@@ -267,7 +267,7 @@ class TITAN_dataset(Dataset):
         self.dataset_name = 'TITAN'
         print(f'------------------Init{self.dataset_name}------------------')
         self.sub_set = sub_set
-        self.norm_traj = norm_traj
+        self.offset_traj = offset_traj
         self.obs_len = obs_len
         self.pred_len = pred_len
         self.seq_interval = self.fps // obs_fps - 1
@@ -534,18 +534,28 @@ class TITAN_dataset(Dataset):
         return self.num_samples
 
     def __getitem__(self, idx):
-        obs_bbox = torch.tensor(self.samples['obs']['bbox_normed'][idx]).float()  # T 4
-        obs_bbox_unnormed = torch.tensor(self.samples['obs']['bbox'][idx]).float()
-        pred_bbox = torch.tensor(self.samples['pred']['bbox_normed'][idx]).float()
-        pred_bbox_unnormed = torch.tensor(self.samples['pred']['bbox'][idx]).float()
+        obs_bbox_offset = copy.deepcopy(torch.tensor(self.samples['obs']['bbox_normed'][idx]).float())  # T 4
+        obs_bbox = copy.deepcopy(torch.tensor(self.samples['obs']['bbox'][idx]).float())
+        pred_bbox_offset = copy.deepcopy(torch.tensor(self.samples['pred']['bbox_normed'][idx]).float())
+        pred_bbox = copy.deepcopy(torch.tensor(self.samples['pred']['bbox'][idx]).float())
         obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float()[:, 0:1]  # [accel, ang_vel] 0 for accel only
         assert len(obs_ego.shape) == 2
         clip_id_int = torch.tensor(int(self.samples['obs']['clip_id'][idx][0]))  # str --> int
         ped_id_int = torch.tensor(int(float(self.samples['obs']['obj_id'][idx][0])))
         img_nm_int = torch.tensor(self.samples['obs']['img_nm_int'][idx])
 
+        obs_bbox_ori = copy.deepcopy(obs_bbox)
+        pred_bbox_ori = copy.deepcopy(pred_bbox)
         # squeeze the coords
         if '0-1' in self.traj_format:
+            obs_bbox_offset[:, 0] /= self.img_size[1]
+            obs_bbox_offset[:, 2] /= self.img_size[1]
+            obs_bbox_offset[:, 1] /= self.img_size[0]
+            obs_bbox_offset[:, 3] /= self.img_size[0]
+            pred_bbox_offset[:, 0] /= self.img_size[1]
+            pred_bbox_offset[:, 2] /= self.img_size[1]
+            pred_bbox_offset[:, 1] /= self.img_size[0]
+            pred_bbox_offset[:, 3] /= self.img_size[0]
             obs_bbox[:, 0] /= self.img_size[1]
             obs_bbox[:, 2] /= self.img_size[1]
             obs_bbox[:, 1] /= self.img_size[0]
@@ -554,6 +564,10 @@ class TITAN_dataset(Dataset):
             pred_bbox[:, 2] /= self.img_size[1]
             pred_bbox[:, 1] /= self.img_size[0]
             pred_bbox[:, 3] /= self.img_size[0]
+            for bb in obs_bbox:
+                for i in bb:
+                    if i > 1:
+                        import pdb;pdb.set_trace()
         # act labels
         if self.multi_label_cross:
             target = torch.tensor(self.samples[self.obs_or_pred]\
@@ -578,12 +592,14 @@ class TITAN_dataset(Dataset):
                   'vid_id_int': clip_id_int,  # int
                   'ped_id_int': ped_id_int,  # int
                   'img_nm_int': img_nm_int,
-                  'obs_bboxes': obs_bbox,
-                  'obs_bboxes_unnormed': obs_bbox_unnormed,
+                  'obs_bboxes': obs_bbox_offset,
+                  'obs_bboxes_unnormed': obs_bbox,
+                  'obs_bboxes_ori': obs_bbox_ori,
                   'obs_ego': obs_ego,
                   'pred_act': target,
-                  'pred_bboxes': pred_bbox,
-                  'pred_bboxes_unnormed': pred_bbox_unnormed,
+                  'pred_bboxes': pred_bbox_offset,
+                  'pred_bboxes_ori': pred_bbox_ori,
+                  'pred_bboxes_unnormed': pred_bbox,
                   'atomic_actions': atomic_action,
                   'simple_context': simple_context,
                   'complex_context': complex_context,  # (1,)
@@ -601,13 +617,14 @@ class TITAN_dataset(Dataset):
         if 'social' in self.modalities:
             # import pdb;pdb.set_trace()
             relations, neighbor_bbox, neighbor_oid =\
-                  pad_neighbor([np.array(self.samples['obs']['neighbor_relations'][idx]).transpose(1,0,2),
-                                np.array(self.samples['obs']['neighbor_bbox'][idx]).transpose(1,0,2),
-                                self.samples['obs']['neighbor_oid'][idx]],
+                  pad_neighbor([copy.deepcopy(np.array(self.samples['obs']['neighbor_relations'][idx]).transpose(1,0,2)),
+                                copy.deepcopy(np.array(self.samples['obs']['neighbor_bbox'][idx]).transpose(1,0,2)),
+                                copy.deepcopy(self.samples['obs']['neighbor_oid'][idx])],
                                 self.max_n_neighbor)
             sample['obs_neighbor_relation'] = torch.tensor(relations).float()  # K T 5
-            sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
-            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float()
+            sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float() # K T 4
+            sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float() # K
+            # print(f'neighbor_bbox: {sample["obs_neighbor_bbox"]}')
         if 'img' in self.modalities:
             imgs = []
             for img_nm in self.samples['obs']['img_nm'][idx]:
@@ -714,7 +731,7 @@ class TITAN_dataset(Dataset):
                     for c in self.seg_cls:
                         crop_seg = crop_local_ctx(
                             torch.unsqueeze(ctx_segs[c][i], dim=0), 
-                            obs_bbox_unnormed[i], 
+                            obs_bbox_ori[i], 
                             self.ctx_size, 
                             interpo='nearest')  # 1 h w
                         crop_segs[c].append(crop_seg)
@@ -769,6 +786,9 @@ class TITAN_dataset(Dataset):
                 try:
                     obs_skeletons = torch.from_numpy(coords).float().permute(2, 0, 1)  # shape: (2, T, nj)
                     pred_skeletons = torch.from_numpy(pred_coords).float().permute(2, 0, 1)  # shape: (2, T, nj)
+                    # add offset
+                    obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
+                    pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
                     if '0-1' in self.sklt_format:
                         obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
                         obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
@@ -1126,7 +1146,7 @@ class TITAN_dataset(Dataset):
         #  Normalize tracks by subtracting bbox/center at first time step from the rest
         print('---------------Normalize traj---------------')
         bbox_normed = copy.deepcopy(samples['bbox'])
-        if self.norm_traj:
+        if self.offset_traj:
             for i in range(len(bbox_normed)):
                 bbox_normed[i] = np.subtract(bbox_normed[i][:], bbox_normed[i][0]).tolist()
         samples['bbox_normed'] = bbox_normed
@@ -1387,172 +1407,172 @@ class TITAN_dataset(Dataset):
                 # new_k = np.array(new_k)
                 self.samples['pred'][k] = new_k
 
-def check_labels():
-    not_matched = set()
-    ori_data_root = '/home/y_feng/workspace6/datasets/TITAN/honda_titan_dataset/dataset'
-    for d in os.listdir(ori_data_root):
-        if 'clip_' in d and '.csv' in d:
-            csv_path = os.path.join(ori_data_root, d)
-            with open(csv_path, 'r') as f:
-                reader = csv.reader(f)
-                for line in reader:
-                    if reader.line_num == 1:
-                        continue
-                    if line[8] not in MOTOIN_STATUS_LABEL.keys():
-                        not_matched.add(line[8])
-                    if line[10] not in COMMUNICATIVE_LABEL.keys():
-                        not_matched.add(line[10])
-                    if line[11] not in COMPLEX_CONTEXTUAL_LABEL.keys():
-                        not_matched.add(line[11])
-                    if line[12] not in ATOM_ACTION_LABEL.keys():
-                        not_matched.add(line[12])
-                    if line[13] not in SIMPLE_CONTEXTUAL_LABEL.keys():
-                        not_matched.add(line[13])
-                    if line[14] not in TRANSPORTIVE_LABEL.keys():
-                        not_matched.add(line[14])
-                    if line[15] not in AGE_LABEL.keys():
-                        not_matched.add(line[15])
-            print(d, ' done')
-    print(not_matched)
+# def check_labels():
+#     not_matched = set()
+#     ori_data_root = '/home/y_feng/workspace6/datasets/TITAN/honda_titan_dataset/dataset'
+#     for d in os.listdir(ori_data_root):
+#         if 'clip_' in d and '.csv' in d:
+#             csv_path = os.path.join(ori_data_root, d)
+#             with open(csv_path, 'r') as f:
+#                 reader = csv.reader(f)
+#                 for line in reader:
+#                     if reader.line_num == 1:
+#                         continue
+#                     if line[8] not in MOTOIN_STATUS_LABEL.keys():
+#                         not_matched.add(line[8])
+#                     if line[10] not in COMMUNICATIVE_LABEL.keys():
+#                         not_matched.add(line[10])
+#                     if line[11] not in COMPLEX_CONTEXTUAL_LABEL.keys():
+#                         not_matched.add(line[11])
+#                     if line[12] not in ATOM_ACTION_LABEL.keys():
+#                         not_matched.add(line[12])
+#                     if line[13] not in SIMPLE_CONTEXTUAL_LABEL.keys():
+#                         not_matched.add(line[13])
+#                     if line[14] not in TRANSPORTIVE_LABEL.keys():
+#                         not_matched.add(line[14])
+#                     if line[15] not in AGE_LABEL.keys():
+#                         not_matched.add(line[15])
+#             print(d, ' done')
+#     print(not_matched)
 
-def crop_imgs(tracks, resize_mode='even_padded', target_size=(224, 224), obj_type='p'):
-    crop_root = '/home/y_feng/workspace6/datasets/TITAN/TITAN_extra/cropped_images'
-    makedir(crop_root)
-    data_root = '/home/y_feng/workspace6/datasets/TITAN/honda_titan_dataset/dataset'
-    if obj_type == 'p':
-        crop_obj_path = os.path.join(crop_root, resize_mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'ped')
-        makedir(crop_obj_path)
-    else:
-        crop_obj_path = os.path.join(crop_root, resize_mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'veh')
-        makedir(crop_obj_path)
-    for i in tqdm(range(len(tracks['clip_id']))):
-        cid = int(tracks['clip_id'][i][0])
-        oid = int(float(tracks['obj_id'][i][0]))
-        cur_clip_path = os.path.join(crop_obj_path, str(cid))
-        makedir(cur_clip_path)
-        cur_obj_path = os.path.join(cur_clip_path, str(oid))
-        makedir(cur_obj_path)
+# def crop_imgs(tracks, resize_mode='even_padded', target_size=(224, 224), obj_type='p'):
+#     crop_root = '/home/y_feng/workspace6/datasets/TITAN/TITAN_extra/cropped_images'
+#     makedir(crop_root)
+#     data_root = '/home/y_feng/workspace6/datasets/TITAN/honda_titan_dataset/dataset'
+#     if obj_type == 'p':
+#         crop_obj_path = os.path.join(crop_root, resize_mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'ped')
+#         makedir(crop_obj_path)
+#     else:
+#         crop_obj_path = os.path.join(crop_root, resize_mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'veh')
+#         makedir(crop_obj_path)
+#     for i in tqdm(range(len(tracks['clip_id']))):
+#         cid = int(tracks['clip_id'][i][0])
+#         oid = int(float(tracks['obj_id'][i][0]))
+#         cur_clip_path = os.path.join(crop_obj_path, str(cid))
+#         makedir(cur_clip_path)
+#         cur_obj_path = os.path.join(cur_clip_path, str(oid))
+#         makedir(cur_obj_path)
         
-        for j in range(len(tracks['clip_id'][i])):
-            img_nm = tracks['img_nm'][i][j]
-            l, t, r, b = list(map(int, tracks['bbox'][i][j]))
-            img_path = os.path.join(data_root, 'images_anonymized', 'clip_'+str(cid), 'images', img_nm)
-            tgt_path = os.path.join(cur_obj_path, img_nm)
-            img = cv2.imread(img_path)
-            cropped = img[t:b, l:r]
-            if resize_mode == 'ori':
-                resized = cropped
-            elif resize_mode == 'resized':
-                resized = cv2.resize(cropped, target_size)
-            elif resize_mode == 'even_padded':
-                h = b-t
-                w = r-l
-                if  float(w) / h > float(target_size[0]) / target_size[1]:
-                    ratio = float(target_size[0]) / w
-                else:
-                    ratio = float(target_size[1]) / h
-                new_size = (int(w*ratio), int(h*ratio))
-                cropped = cv2.resize(cropped, new_size)
-                w_pad = target_size[0] - new_size[0]
-                h_pad = target_size[1] - new_size[1]
-                l_pad = w_pad // 2
-                r_pad = w_pad - l_pad
-                t_pad = h_pad // 2
-                b_pad = h_pad - t_pad
-                resized = cv2.copyMakeBorder(cropped,t_pad,b_pad,l_pad,r_pad,cv2.BORDER_CONSTANT,value=(0, 0, 0))  # t, b, l, r
-                assert (resized.shape[1], resized.shape[0]) == target_size
-            else:
-                raise NotImplementedError(resize_mode)
-            cv2.imwrite(tgt_path, resized)
-        print(i, cid, cur_obj_path, 'done')
+#         for j in range(len(tracks['clip_id'][i])):
+#             img_nm = tracks['img_nm'][i][j]
+#             l, t, r, b = list(map(int, tracks['bbox'][i][j]))
+#             img_path = os.path.join(data_root, 'images_anonymized', 'clip_'+str(cid), 'images', img_nm)
+#             tgt_path = os.path.join(cur_obj_path, img_nm)
+#             img = cv2.imread(img_path)
+#             cropped = img[t:b, l:r]
+#             if resize_mode == 'ori':
+#                 resized = cropped
+#             elif resize_mode == 'resized':
+#                 resized = cv2.resize(cropped, target_size)
+#             elif resize_mode == 'even_padded':
+#                 h = b-t
+#                 w = r-l
+#                 if  float(w) / h > float(target_size[0]) / target_size[1]:
+#                     ratio = float(target_size[0]) / w
+#                 else:
+#                     ratio = float(target_size[1]) / h
+#                 new_size = (int(w*ratio), int(h*ratio))
+#                 cropped = cv2.resize(cropped, new_size)
+#                 w_pad = target_size[0] - new_size[0]
+#                 h_pad = target_size[1] - new_size[1]
+#                 l_pad = w_pad // 2
+#                 r_pad = w_pad - l_pad
+#                 t_pad = h_pad // 2
+#                 b_pad = h_pad - t_pad
+#                 resized = cv2.copyMakeBorder(cropped,t_pad,b_pad,l_pad,r_pad,cv2.BORDER_CONSTANT,value=(0, 0, 0))  # t, b, l, r
+#                 assert (resized.shape[1], resized.shape[0]) == target_size
+#             else:
+#                 raise NotImplementedError(resize_mode)
+#             cv2.imwrite(tgt_path, resized)
+#         print(i, cid, cur_obj_path, 'done')
 
-def save_context_imgs(tracks, mode='local', target_size=(224, 224), obj_type='p'):
-    ori_H, ori_W = 1520, 2704
-    crop_root = '/home/y_feng/workspace6/datasets/TITAN/TITAN_extra/context'
-    makedir(crop_root)
-    data_root = '/home/y_feng/workspace6/datasets/TITAN/honda_titan_dataset/dataset'
-    if obj_type == 'p':
-        crop_obj_path = os.path.join(crop_root, mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'ped')
-        makedir(crop_obj_path)
-    else:
-        crop_obj_path = os.path.join(crop_root, mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'veh')
-        makedir(crop_obj_path)
+# def save_context_imgs(tracks, mode='local', target_size=(224, 224), obj_type='p'):
+#     ori_H, ori_W = 1520, 2704
+#     crop_root = '/home/y_feng/workspace6/datasets/TITAN/TITAN_extra/context'
+#     makedir(crop_root)
+#     data_root = '/home/y_feng/workspace6/datasets/TITAN/honda_titan_dataset/dataset'
+#     if obj_type == 'p':
+#         crop_obj_path = os.path.join(crop_root, mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'ped')
+#         makedir(crop_obj_path)
+#     else:
+#         crop_obj_path = os.path.join(crop_root, mode, str(target_size[0])+'w_by_'+str(target_size[1])+'h', 'veh')
+#         makedir(crop_obj_path)
     
-    if mode == 'local':
-        for i in range(len(tracks['clip_id'])):  # tracks
-            cid = int(tracks['clip_id'][i][0])
-            oid = int(float(tracks['obj_id'][i][0]))
-            cur_clip_path = os.path.join(crop_obj_path, str(cid))
-            makedir(cur_clip_path)
-            cur_obj_path = os.path.join(cur_clip_path, str(oid))
-            makedir(cur_obj_path)
-            for j in range(len(tracks['clip_id'][i])):  # time steps in each track
-                img_nm = tracks['img_nm'][i][j]
-                l, t, r, b = list(map(int, tracks['bbox'][i][j]))
-                img_path = os.path.join(data_root, 'images_anonymized', 'clip_'+str(cid), 'images', img_nm)
-                tgt_path = os.path.join(cur_obj_path, img_nm)
-                img = cv2.imread(img_path)
-                # mask target pedestrian
-                rect = np.array([[l, t], [r, t], [r, b], [l, b]])
-                masked = cv2.fillConvexPoly(img, rect, (127, 127, 127))
-                # crop local context
-                x = (l+r) // 2
-                y = (t+b) // 2
-                h = b-t
-                w = r-l
-                crop_h = h*2
-                crop_w = h*2
-                crop_l = max(x-h, 0)
-                crop_r = min(x+h, ori_W)
-                crop_t = max(y-h, 0)
-                crop_b = min(y+h, ori_W)
-                cropped = masked[crop_t:crop_b, crop_l:crop_r]
-                l_pad = max(h-x, 0)
-                r_pad = max(x+h-ori_W, 0)
-                t_pad = max(h-y, 0)
-                b_pad = max(y+h-ori_H, 0)
-                cropped = cv2.copyMakeBorder(cropped, t_pad, b_pad, l_pad, r_pad, cv2.BORDER_CONSTANT, value=(127, 127, 127))
-                assert cropped.shape[0] == crop_h and cropped.shape[1] == crop_w, (cropped.shape, (crop_h, crop_w))
-                resized = cv2.resize(cropped, target_size)
-                cv2.imwrite(tgt_path, resized)
-            print(i, cid, oid, cur_obj_path, 'done')
-    elif mode == 'ori_local':
-        for i in range(len(tracks['clip_id'])):  # tracks
-            cid = int(tracks['clip_id'][i][0])
-            oid = int(float(tracks['obj_id'][i][0]))
-            cur_clip_path = os.path.join(crop_obj_path, str(cid))
-            makedir(cur_clip_path)
-            cur_obj_path = os.path.join(cur_clip_path, str(oid))
-            makedir(cur_obj_path)
-            for j in range(len(tracks['clip_id'][i])):  # time steps in each track
-                img_nm = tracks['img_nm'][i][j]
-                l, t, r, b = list(map(int, tracks['bbox'][i][j]))
-                img_path = os.path.join(data_root, 'images_anonymized', 'clip_'+str(cid), 'images', img_nm)
-                tgt_path = os.path.join(cur_obj_path, img_nm)
-                img = cv2.imread(img_path)
-                # crop local context
-                x = (l+r) // 2
-                y = (t+b) // 2
-                h = b-t
-                w = r-l
-                crop_h = h*2
-                crop_w = h*2
-                crop_l = max(x-h, 0)
-                crop_r = min(x+h, ori_W)
-                crop_t = max(y-h, 0)
-                crop_b = min(y+h, ori_W)
-                cropped = img[crop_t:crop_b, crop_l:crop_r]
-                l_pad = max(h-x, 0)
-                r_pad = max(x+h-ori_W, 0)
-                t_pad = max(h-y, 0)
-                b_pad = max(y+h-ori_H, 0)
-                cropped = cv2.copyMakeBorder(cropped, t_pad, b_pad, l_pad, r_pad, cv2.BORDER_CONSTANT, value=(127, 127, 127))
-                assert cropped.shape[0] == crop_h and cropped.shape[1] == crop_w, (cropped.shape, (crop_h, crop_w))
-                resized = cv2.resize(cropped, target_size)
-                cv2.imwrite(tgt_path, resized)
-            print(i, cid, oid, cur_obj_path, 'done')
-    else:
-        raise NotImplementedError(mode)
+#     if mode == 'local':
+#         for i in range(len(tracks['clip_id'])):  # tracks
+#             cid = int(tracks['clip_id'][i][0])
+#             oid = int(float(tracks['obj_id'][i][0]))
+#             cur_clip_path = os.path.join(crop_obj_path, str(cid))
+#             makedir(cur_clip_path)
+#             cur_obj_path = os.path.join(cur_clip_path, str(oid))
+#             makedir(cur_obj_path)
+#             for j in range(len(tracks['clip_id'][i])):  # time steps in each track
+#                 img_nm = tracks['img_nm'][i][j]
+#                 l, t, r, b = list(map(int, tracks['bbox'][i][j]))
+#                 img_path = os.path.join(data_root, 'images_anonymized', 'clip_'+str(cid), 'images', img_nm)
+#                 tgt_path = os.path.join(cur_obj_path, img_nm)
+#                 img = cv2.imread(img_path)
+#                 # mask target pedestrian
+#                 rect = np.array([[l, t], [r, t], [r, b], [l, b]])
+#                 masked = cv2.fillConvexPoly(img, rect, (127, 127, 127))
+#                 # crop local context
+#                 x = (l+r) // 2
+#                 y = (t+b) // 2
+#                 h = b-t
+#                 w = r-l
+#                 crop_h = h*2
+#                 crop_w = h*2
+#                 crop_l = max(x-h, 0)
+#                 crop_r = min(x+h, ori_W)
+#                 crop_t = max(y-h, 0)
+#                 crop_b = min(y+h, ori_W)
+#                 cropped = masked[crop_t:crop_b, crop_l:crop_r]
+#                 l_pad = max(h-x, 0)
+#                 r_pad = max(x+h-ori_W, 0)
+#                 t_pad = max(h-y, 0)
+#                 b_pad = max(y+h-ori_H, 0)
+#                 cropped = cv2.copyMakeBorder(cropped, t_pad, b_pad, l_pad, r_pad, cv2.BORDER_CONSTANT, value=(127, 127, 127))
+#                 assert cropped.shape[0] == crop_h and cropped.shape[1] == crop_w, (cropped.shape, (crop_h, crop_w))
+#                 resized = cv2.resize(cropped, target_size)
+#                 cv2.imwrite(tgt_path, resized)
+#             print(i, cid, oid, cur_obj_path, 'done')
+#     elif mode == 'ori_local':
+#         for i in range(len(tracks['clip_id'])):  # tracks
+#             cid = int(tracks['clip_id'][i][0])
+#             oid = int(float(tracks['obj_id'][i][0]))
+#             cur_clip_path = os.path.join(crop_obj_path, str(cid))
+#             makedir(cur_clip_path)
+#             cur_obj_path = os.path.join(cur_clip_path, str(oid))
+#             makedir(cur_obj_path)
+#             for j in range(len(tracks['clip_id'][i])):  # time steps in each track
+#                 img_nm = tracks['img_nm'][i][j]
+#                 l, t, r, b = list(map(int, tracks['bbox'][i][j]))
+#                 img_path = os.path.join(data_root, 'images_anonymized', 'clip_'+str(cid), 'images', img_nm)
+#                 tgt_path = os.path.join(cur_obj_path, img_nm)
+#                 img = cv2.imread(img_path)
+#                 # crop local context
+#                 x = (l+r) // 2
+#                 y = (t+b) // 2
+#                 h = b-t
+#                 w = r-l
+#                 crop_h = h*2
+#                 crop_w = h*2
+#                 crop_l = max(x-h, 0)
+#                 crop_r = min(x+h, ori_W)
+#                 crop_t = max(y-h, 0)
+#                 crop_b = min(y+h, ori_W)
+#                 cropped = img[crop_t:crop_b, crop_l:crop_r]
+#                 l_pad = max(h-x, 0)
+#                 r_pad = max(x+h-ori_W, 0)
+#                 t_pad = max(h-y, 0)
+#                 b_pad = max(y+h-ori_H, 0)
+#                 cropped = cv2.copyMakeBorder(cropped, t_pad, b_pad, l_pad, r_pad, cv2.BORDER_CONSTANT, value=(127, 127, 127))
+#                 assert cropped.shape[0] == crop_h and cropped.shape[1] == crop_w, (cropped.shape, (crop_h, crop_w))
+#                 resized = cv2.resize(cropped, target_size)
+#                 cv2.imwrite(tgt_path, resized)
+#             print(i, cid, oid, cur_obj_path, 'done')
+#     else:
+#         raise NotImplementedError(mode)
 
 
 
@@ -1570,32 +1590,4 @@ if __name__ == '__main__':
     parser.add_argument('--ctx_mode', type=str, default='local')
     args = parser.parse_args()
 
-    if args.action == 'crop':
-        # all_set = TITAN_dataset(sub_set='all')
-        # crop_imgs(all_set.p_tracks, resize_mode=args.resize_mode, target_size=(args.w, args.h), obj_type='p')
-        if args.subset == 'train':
-            dataset = TITAN_dataset(sub_set='default_train', )
-            crop_imgs(dataset.p_tracks, resize_mode=args.resize_mode, target_size=(args.w, args.h), obj_type='p')
-        elif args.subset == 'val':
-            dataset = TITAN_dataset(sub_set='default_val', )
-            crop_imgs(dataset.p_tracks, resize_mode=args.resize_mode, target_size=(args.w, args.h), obj_type='p')
-        elif args.subset == 'test':
-            dataset = TITAN_dataset(sub_set='default_test', )
-            crop_imgs(dataset.p_tracks, resize_mode=args.resize_mode, target_size=(args.w, args.h), obj_type='p')
-        
-        # crop_imgs(val_set.p_tracks, resize_mode=args.resize_mode, target_size=(args.w, args.h), obj_type='p')
-        # crop_imgs(test_set.p_tracks, resize_mode=args.resize_mode, target_size=(args.w, args.h), obj_type='p')
-        # crop_imgs(train_set.v_tracks, resize_mode=args.resize_mode, target_size=(args.w, args.h), obj_type='v')
-        # crop_imgs(val_set.v_tracks, resize_mode=args.resize_mode, target_size=(args.w, args.h), obj_type='v')
-        # crop_imgs(test_set.v_tracks, resize_mode=args.resize_mode, target_size=(args.w, args.h), obj_type='v')
-    elif args.action == 'context':
-        train_set = TITAN_dataset(sub_set='default_train')
-        val_set = TITAN_dataset(sub_set='default_val')
-        test_set = TITAN_dataset(sub_set='default_test')
-        save_context_imgs(train_set.p_tracks, mode=args.ctx_mode, target_size=(args.w, args.h), obj_type='p')
-        save_context_imgs(val_set.p_tracks, mode=args.ctx_mode, target_size=(args.w, args.h), obj_type='p')
-        save_context_imgs(test_set.p_tracks, mode=args.ctx_mode, target_size=(args.w, args.h), obj_type='p')
-        save_context_imgs(train_set.v_tracks, mode=args.ctx_mode, target_size=(args.w, args.h), obj_type='v')
-        save_context_imgs(val_set.v_tracks, mode=args.ctx_mode, target_size=(args.w, args.h), obj_type='v')
-        save_context_imgs(test_set.v_tracks, mode=args.ctx_mode, target_size=(args.w, args.h), obj_type='v')
-    pass
+    

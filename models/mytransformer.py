@@ -304,6 +304,7 @@ class MyTransformerEncoderLayer(nn.Module):
         x, attn = self.self_attn(x, x, x,
                            attn_mask=attn_mask,
                            key_padding_mask=key_padding_mask,
+                           average_attn_weights=False,
                            need_weights=True)  # !!!
         return self.dropout1(x), attn
 

@@ -65,6 +65,8 @@ class PedSpace(nn.Module):
                     nn.ReLU(),
                     nn.Linear(self.proj_dim, self.proj_dim)
                     )
+            self.mu_enc = nn.ModuleDict(self.mu_enc)
+            self.sig_enc = nn.ModuleDict(self.sig_enc)
         # projection to proto
         self.proto_enc = nn.Linear(in_features=self.proj_dim, 
                                    out_features=self.n_proto, 
@@ -115,18 +117,21 @@ class PedSpace(nn.Module):
             mu, sig = None, None
             for m in self.modalities:
                 if mu is None:
-                    mu = self.mu_enc[m](out[m])
+                    try:
+                        mu = self.mu_enc[m](out[m])
+                    except:
+                        import pdb; pdb.set_trace()
                     sig = self.sig_enc[m](out[m])
                     modality_effs[m] = None
                 else:
                     mu, sig, effs = update_gaussian(mu, self.mu_enc[m](out[m]), sig, self.sig_enc[m](out[m]))
                     if len(modality_effs.keys()) == 1:
-                        modality_effs[list(modality_effs.keys())[0]] = effs[0]
-                    modality_effs[m] = effs[1]
-                        
+                        modality_effs[list(modality_effs.keys())[0]] = effs[0].mean(-1)
+                    modality_effs[m] = effs[1].mean(-1)
             eps = torch.randn(mu.shape[0], mu.shape[1], device=mu.device)  # B d
             feat_fused = mu + eps*torch.exp(sig)  # B d
         elif self.mm_fusion_mode == 'avg':
+            modality_effs = {m: torch.ones(inputs.shape[0]) for m in self.modalities}
             feat_fused = torch.stack(list(out.values()), dim=2).mean(dim=2)  # B d
         else:
             raise ValueError(self.mm_fusion_mode)
@@ -224,6 +229,9 @@ class SingleBranch(nn.Module):
         self.proj_layers = nn.Sequential(*self.proj_layers)
 
     def forward(self, x):
+        if self.modality == 'social' and 'transformer' in self.backbone_name:
+            # B K T 5 --> B 5 T K
+            x = x.permute(0, 3, 2, 1)
         feat = self.backbone(x)
         # B C ...
         B, C = feat.size(0), feat.size(1)
