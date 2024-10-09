@@ -4,9 +4,9 @@ from ..data.nusc_split import TRAIN_SC, VAL_SC
 from ..data.coord_transform import nusc_3dbbox_to_2dbbox
 from ..visualize.visualize_bbox import draw_box, draw_boxes_on_img
 from ..utils import makedir
-from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global
+from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global, norm_bbox, norm_sklt
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
-from .dataset_id import DATASET2ID
+from .dataset_id import DATASET_TO_ID
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
 from config import dataset_root
 
@@ -53,6 +53,7 @@ class NuscDataset(torch.utils.data.Dataset):
                  ego_format='accel',
                  seg_cls=['person', 'vehicle', 'road', 'traffic_light'],
                  max_n_neighbor=10,
+                 min_wh=(72,36),
                  ):
         super().__init__()
         self.data_root = data_root
@@ -184,35 +185,23 @@ class NuscDataset(torch.utils.data.Dataset):
         pred_bbox_ori = copy.deepcopy(pred_bbox)
         # squeeze the coords
         if '0-1' in self.traj_format:
-            obs_bbox_offset[:, 0] /= self.img_size[1]
-            obs_bbox_offset[:, 2] /= self.img_size[1]
-            obs_bbox_offset[:, 1] /= self.img_size[0]
-            obs_bbox_offset[:, 3] /= self.img_size[0]
-            pred_bbox_offset[:, 0] /= self.img_size[1]
-            pred_bbox_offset[:, 2] /= self.img_size[1]
-            pred_bbox_offset[:, 1] /= self.img_size[0]
-            pred_bbox_offset[:, 3] /= self.img_size[0]
-            obs_bbox[:, 0] /= self.img_size[1]
-            obs_bbox[:, 2] /= self.img_size[1]
-            obs_bbox[:, 1] /= self.img_size[0]
-            obs_bbox[:, 3] /= self.img_size[0]
-            pred_bbox[:, 0] /= self.img_size[1]
-            pred_bbox[:, 2] /= self.img_size[1]
-            pred_bbox[:, 1] /= self.img_size[0]
-            pred_bbox[:, 3] /= self.img_size[0]
-        sample = {'dataset_name': torch.tensor(DATASET2ID[self.dataset_name]),
+            obs_bbox_offset = norm_bbox(obs_bbox_offset, self.dataset_name)
+            pred_bbox_offset = norm_bbox(pred_bbox_offset, self.dataset_name)
+            obs_bbox = norm_bbox(obs_bbox, self.dataset_name)
+            pred_bbox = norm_bbox(pred_bbox, self.dataset_name)
+        sample = {'dataset_name': torch.tensor(DATASET_TO_ID[self.dataset_name]),
                   'set_id_int': torch.tensor(-1),
                   'vid_id_int': sce_id_int,  # int
                   'ped_id_int': ins_id_int,  # int
                   'img_nm_int': sam_id_int,
                   'obs_bboxes': obs_bbox_offset,
                   'obs_bboxes_unnormed': obs_bbox,
-                  'obs_bboxex_ori': obs_bbox_ori,
+                  'obs_bboxes_ori': obs_bbox_ori,
                   'obs_ego': obs_ego,
                   'pred_act': torch.tensor(-1),
                   'pred_bboxes': pred_bbox_offset,
                   'pred_bboxes_unnormed': pred_bbox,
-                  'pred_bboxex_ori': pred_bbox_ori,
+                  'pred_bboxes_ori': pred_bbox_ori,
                   'atomic_actions': torch.tensor(-1),
                   'simple_context': torch.tensor(-1),
                   'complex_context': torch.tensor(-1),  # (1,)
@@ -292,14 +281,15 @@ class NuscDataset(torch.utils.data.Dataset):
             if 'coord' in self.sklt_format:
                 obs_skeletons = torch.from_numpy(sklts).float().permute(2, 0, 1)[:2]  # shape: (2, T, nj)
                 pred_skeletons = torch.from_numpy(pred_sklts).float().permute(2, 0, 1)[:2]
+                # yx -> xy
+                obs_skeletons = obs_skeletons.flip(0)
+                pred_skeletons = pred_skeletons.flip(0)
                 # add offset
                 obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
                 pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
                 if '0-1' in self.sklt_format:
-                    obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
-                    obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
-                    pred_skeletons[0] = pred_skeletons[0] / self.img_size[0]
-                    pred_skeletons[1] = pred_skeletons[1] / self.img_size[1]
+                    obs_skeletons = norm_sklt(obs_skeletons, self.dataset_name)
+                    pred_skeletons = norm_sklt(pred_skeletons, self.dataset_name)
             elif self.sklt_format == 'pseudo_heatmap':
                 # T C H W -> C T H W
                 obs_skeletons = torch.from_numpy(sklts).float().permute(1, 0, 2, 3)  # shape: (17, seq_len, 48, 48)
@@ -308,8 +298,8 @@ class NuscDataset(torch.utils.data.Dataset):
             sample['pred_skeletons'] = pred_skeletons
         if 'ctx' in self.modalities:
             if self.ctx_format in ('local', 'ori_local', 'mask_ped', 'ori',
-                                   'ped_graph'):
-                if self.ctx_format == 'ped_graph':
+                                   'ped_graph', 'ped_graph_seg'):
+                if self.ctx_format in ('ped_graph', 'ped_graph_seg'):
                     ctx_format_dir = 'ori_local'
                 else:
                     ctx_format_dir = self.ctx_format
@@ -336,7 +326,7 @@ class NuscDataset(torch.utils.data.Dataset):
                 # BGR -> RGB
                 if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])
-                if self.ctx_format == 'ped_graph':
+                if self.ctx_format in ('ped_graph', 'ped_graph_seg'):
                     all_c_seg = []
                     ins_id = int(float(self.samples['obs']['ins_id'][idx][0]))
                     sam_id = self.samples['obs']['sam_id'][idx][-1]
@@ -354,7 +344,9 @@ class NuscDataset(torch.utils.data.Dataset):
                         all_c_seg.append(torch.from_numpy(segmap))
                     all_c_seg = torch.stack(all_c_seg, dim=-1)  # h w n_cls
                     all_c_seg = torch.argmax(all_c_seg, dim=-1, keepdim=True).permute(2, 0, 1)  # 1 h w
-                    ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0)  # 4 h w
+                    ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0).unsqueeze(1)  # 4 1 h w
+                    if self.ctx_format == 'ped_graph_seg':
+                        ctx_imgs = ctx_imgs[-1:]
                 sample['obs_context'] = ctx_imgs  # shape [3, obs_len, H, W]
             elif self.ctx_format in \
                 ('seg_ori_local', 'seg_local'):

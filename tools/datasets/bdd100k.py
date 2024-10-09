@@ -12,10 +12,10 @@ import numpy as np
 from scipy import interpolate
 from torchvision.transforms import functional as TVF
 from ..data.preprocess import bdd100k_get_vidnm2vidid
-from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global
+from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global, norm_bbox, norm_sklt
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
-from .dataset_id import DATASET2ID, ID2DATASET
+from .dataset_id import DATASET_TO_ID, ID_TO_DATASET
 
 from config import dataset_root
 
@@ -73,6 +73,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                  rm_trun=False,
                  tte=None,
                  max_n_neighbor=10,
+                 min_wh=(72,36),
                  ):
         super().__init__()
         self.dataset_name = 'bdd100k'
@@ -203,23 +204,11 @@ class BDD100kDataset(torch.utils.data.Dataset):
         pred_bbox_ori = copy.deepcopy(pred_bbox)
         # squeeze the coords
         if '0-1' in self.traj_format:
-            obs_bbox_offset[:, 0] /= self.img_size[1]
-            obs_bbox_offset[:, 2] /= self.img_size[1]
-            obs_bbox_offset[:, 1] /= self.img_size[0]
-            obs_bbox_offset[:, 3] /= self.img_size[0]
-            pred_bbox_offset[:, 0] /= self.img_size[1]
-            pred_bbox_offset[:, 2] /= self.img_size[1]
-            pred_bbox_offset[:, 1] /= self.img_size[0]
-            pred_bbox_offset[:, 3] /= self.img_size[0]
-            obs_bbox[:, 0] /= self.img_size[1]
-            obs_bbox[:, 2] /= self.img_size[1]
-            obs_bbox[:, 1] /= self.img_size[0]
-            obs_bbox[:, 3] /= self.img_size[0]
-            pred_bbox[:, 0] /= self.img_size[1]
-            pred_bbox[:, 2] /= self.img_size[1]
-            pred_bbox[:, 1] /= self.img_size[0]
-            pred_bbox[:, 3] /= self.img_size[0]
-        sample = {'dataset_name': torch.tensor(DATASET2ID[self.dataset_name]),
+            obs_bbox_offset = norm_bbox(obs_bbox_offset, self.dataset_name)
+            pred_bbox_offset = norm_bbox(pred_bbox_offset, self.dataset_name)
+            obs_bbox = norm_bbox(obs_bbox, self.dataset_name)
+            pred_bbox = norm_bbox(pred_bbox, self.dataset_name)
+        sample = {'dataset_name': torch.tensor(DATASET_TO_ID[self.dataset_name]),
                   'set_id_int': torch.tensor(-1),
                   'vid_id_int': vid_id_int,  # int
                   'ped_id_int': obj_id_int,  # int
@@ -308,6 +297,9 @@ class BDD100kDataset(torch.utils.data.Dataset):
             if 'coord' in self.sklt_format:
                 obs_skeletons = torch.from_numpy(sklts).float().permute(2, 0, 1)[:2]  # shape: (2, T, nj)
                 pred_skeletons = torch.from_numpy(pred_sklts).float().permute(2, 0, 1)[:2] # (2, T, nj)
+                # yx -> xy
+                obs_skeletons = obs_skeletons.flip(0)
+                pred_skeletons = pred_skeletons.flip(0)
                 # add offset
                 obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
                 pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
@@ -325,9 +317,9 @@ class BDD100kDataset(torch.utils.data.Dataset):
 
         if 'ctx' in self.modalities:
             if self.ctx_format in ('local', 'ori_local', 'mask_ped', 'ori',
-                                    'ped_graph'):
+                                    'ped_graph', 'ped_graph_seg'):
                 ctx_imgs = []
-                if self.ctx_format == 'ped_graph':
+                if self.ctx_format in ('ped_graph', 'ped_graph_seg'):
                     ctx_format_dir = 'ori_local'
                 else:
                     ctx_format_dir = self.ctx_format
@@ -352,7 +344,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                 if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])
                 # load cropped segmentation map
-                if self.ctx_format == 'ped_graph':
+                if self.ctx_format in ('ped_graph', 'ped_graph_seg'):
                     all_c_seg = []
                     oid = self.samples['obs']['obj_id'][idx][0]
                     img_id = self.samples['obs']['img_id_int'][idx][-1]
@@ -372,7 +364,8 @@ class BDD100kDataset(torch.utils.data.Dataset):
                         all_c_seg.append(torch.from_numpy(segmap))
                     all_c_seg = torch.stack(all_c_seg, dim=-1)  # h w n_cls
                     all_c_seg = torch.argmax(all_c_seg, dim=-1, keepdim=True).permute(2, 0, 1)  # 1 h w
-                    ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0)  # 4 h w
+                    ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0).unsqueeze(1)  # 4 1 h w
+
                 sample['obs_context'] = ctx_imgs  # shape [3(or 4), obs_len, H, W]
             elif self.ctx_format in \
                 ('seg_ori_local', 'seg_local'):

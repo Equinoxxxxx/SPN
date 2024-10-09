@@ -21,10 +21,10 @@ from .jaad_data import JAAD
 from ..utils import makedir
 from ..utils import mapping_20, ltrb2xywh, coord2pseudo_heatmap, TITANclip_txt2list, cls_weights
 from ..utils import get_random_idx
-from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global
+from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global, norm_bbox, norm_sklt
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
 from torchvision.transforms import functional as TVF
-from .dataset_id import DATASET2ID, ID2DATASET
+from .dataset_id import DATASET_TO_ID, ID_TO_DATASET
 from ..data.bbox import ltrb2xywh_seq, ltrb2xywh_multi_seq, bbox2d_relation_multi_seq, pad_neighbor
 from config import dataset_root
 
@@ -260,6 +260,7 @@ class TITAN_dataset(Dataset):
                  seg_cls=['person', 'vehicle', 'road', 'traffic_light'],
                  max_n_neighbor=10,
                  pop_occl_track=1,
+                 min_wh=(72,36),
                  ) -> None:
         super(Dataset, self).__init__()
         self.img_size = (1520, 2704)
@@ -295,6 +296,7 @@ class TITAN_dataset(Dataset):
         self.multi_label_cross = multi_label_cross
         self.use_cross = 'cross' in act_sets
         self.use_atomic = 'atomic' in act_sets
+        self.use_simple = 'simple' in act_sets
         self.use_complex = 'complex' in act_sets
         self.use_communicative = 'communicative' in act_sets
         self.use_transporting = 'transporting' in act_sets
@@ -321,7 +323,7 @@ class TITAN_dataset(Dataset):
                                              self.resize_mode, 
                                              str(crop_size[1])+'w_by_'\
                                                 +str(crop_size[0])+'h')
-        if self.ctx_format == 'ped_graph':
+        if self.ctx_format in ('ped_graph', 'ped_graph_seg'):
             ctx_format_dir = 'ori_local'
         else:
             ctx_format_dir = self.ctx_format
@@ -480,6 +482,17 @@ class TITAN_dataset(Dataset):
                   self.num_samples_atomic)
             self.class_weights['atomic'] = cls_weights(self.num_samples_atomic, 
                                                        'sklearn')
+        if self.use_simple:
+            labels = np.array(self.samples['pred']['simple_context'])[:, -1]
+            self.num_samples_simple = []
+            for i in range(NUM_CLS_SIMPLE):
+                n_cur_cls = sum(labels == i)
+                self.num_samples_simple.append(n_cur_cls)
+            print('simple label distr', 
+                  self.num_samples, 
+                  self.num_samples_simple)
+            self.class_weights['simple'] = cls_weights(self.num_samples_simple, 
+                                                       'sklearn')
         if self.use_complex:
             labels = np.array(self.samples['pred']['complex_context'])[:, -1]
             self.num_samples_complex = []
@@ -532,6 +545,31 @@ class TITAN_dataset(Dataset):
 
     def __len__(self):
         return self.num_samples
+    
+    def rm_small_bb(self, data, min_size):
+        print('----------Remove small bb-----------')
+        min_w, min_h = min_size
+        idx = list(range(self.num_samples))
+        new_idx = list(range(self.num_samples))
+
+        bboxes = np.array(data['']['obs_bbox'])  # ltrb
+        hws = np.stack([bboxes[:, :, 3] - bboxes[:, :, 1], bboxes[:, :, 2] - bboxes[:, :, 0]], axis=2)  # mean: 134, 46
+        print('hws shape: ', hws.shape)
+        print('mean h: ', np.mean(hws[:, :, 0]))
+        print('mean w: ', np.mean(hws[:, :, 1]))
+        for i in idx:
+            for hw in hws[i]:
+                if hw[0] < min_h or hw[1] < min_w:
+                    new_idx.remove(i)
+                    break
+        
+        for k in data.keys():
+            data[k] = data[k][new_idx]
+        print('n samples before removing small bb', self.num_samples)
+        self.num_samples = len(new_idx)
+        print('n samples after removing small bb', self.num_samples)
+
+        return data
 
     def __getitem__(self, idx):
         obs_bbox_offset = copy.deepcopy(torch.tensor(self.samples['obs']['bbox_normed'][idx]).float())  # T 4
@@ -544,26 +582,16 @@ class TITAN_dataset(Dataset):
         ped_id_int = torch.tensor(int(float(self.samples['obs']['obj_id'][idx][0])))
         img_nm_int = torch.tensor(self.samples['obs']['img_nm_int'][idx])
 
+        obs_bbox[:,2] = torch.clamp(obs_bbox[:,2], min=0, max=self.img_size[1]) # r
+        obs_bbox[:,3] = torch.clamp(obs_bbox[:,3], min=0, max=self.img_size[0]) # b
         obs_bbox_ori = copy.deepcopy(obs_bbox)
         pred_bbox_ori = copy.deepcopy(pred_bbox)
         # squeeze the coords
         if '0-1' in self.traj_format:
-            obs_bbox_offset[:, 0] /= self.img_size[1]
-            obs_bbox_offset[:, 2] /= self.img_size[1]
-            obs_bbox_offset[:, 1] /= self.img_size[0]
-            obs_bbox_offset[:, 3] /= self.img_size[0]
-            pred_bbox_offset[:, 0] /= self.img_size[1]
-            pred_bbox_offset[:, 2] /= self.img_size[1]
-            pred_bbox_offset[:, 1] /= self.img_size[0]
-            pred_bbox_offset[:, 3] /= self.img_size[0]
-            obs_bbox[:, 0] /= self.img_size[1]
-            obs_bbox[:, 2] /= self.img_size[1]
-            obs_bbox[:, 1] /= self.img_size[0]
-            obs_bbox[:, 3] /= self.img_size[0]
-            pred_bbox[:, 0] /= self.img_size[1]
-            pred_bbox[:, 2] /= self.img_size[1]
-            pred_bbox[:, 1] /= self.img_size[0]
-            pred_bbox[:, 3] /= self.img_size[0]
+            obs_bbox_offset = norm_bbox(obs_bbox_offset, self.dataset_name)
+            pred_bbox_offset = norm_bbox(pred_bbox_offset, self.dataset_name)
+            obs_bbox = norm_bbox(obs_bbox, self.dataset_name)
+            pred_bbox = norm_bbox(pred_bbox, self.dataset_name)
             for bb in obs_bbox:
                 for i in bb:
                     if i > 1:
@@ -587,7 +615,7 @@ class TITAN_dataset(Dataset):
                                      ['transporting'][idx][-1])
         age = torch.tensor(self.samples[self.obs_or_pred]\
                            ['age'][idx][-1])
-        sample = {'dataset_name': torch.tensor(DATASET2ID[self.dataset_name]),
+        sample = {'dataset_name': torch.tensor(DATASET_TO_ID[self.dataset_name]),
                   'set_id_int': torch.tensor(-1),
                   'vid_id_int': clip_id_int,  # int
                   'ped_id_int': ped_id_int,  # int
@@ -647,7 +675,8 @@ class TITAN_dataset(Dataset):
                 ped_imgs = torch.flip(ped_imgs, dims=[0])
             sample['ped_imgs'] = ped_imgs
         if 'ctx' in self.modalities:
-            if self.ctx_format in ('local','ori_local','mask_ped','ori','ped_graph'):
+            if self.ctx_format in ('local','ori_local','mask_ped','ori',
+                                   'ped_graph', 'ped_graph_seg'):
                 ctx_imgs = []
                 for img_nm in self.samples['obs']['img_nm'][idx]:
                     img_path = os.path.join(self.ctx_root, 
@@ -671,7 +700,7 @@ class TITAN_dataset(Dataset):
                 if self.target_color_order == 'RGB':
                     ctx_imgs = torch.flip(ctx_imgs, dims=[0])
                 # add segmentation channel
-                if self.ctx_format == 'ped_graph':
+                if self.ctx_format in ('ped_graph', 'ped_graph_seg'):
                     all_c_seg = []
                     img_nm = self.samples['obs']['img_nm'][idx][-1]
                     vid_dir = self.samples['obs']['clip_id'][idx][0]
@@ -690,7 +719,7 @@ class TITAN_dataset(Dataset):
                         all_c_seg.append(torch.from_numpy(segmap))
                     all_c_seg = torch.stack(all_c_seg, dim=-1)  # h w n_cls
                     all_c_seg = torch.argmax(all_c_seg, dim=-1, keepdim=True).permute(2, 0, 1)  # 1 h w
-                    ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0)  # 4 h w
+                    ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0).unsqueeze(1)  # 4 1 h w
                 sample['obs_context'] = ctx_imgs  # [c, obs_len, H, W]
             elif self.ctx_format in \
                 ('seg_ori_local', 'seg_local'):
@@ -780,24 +809,26 @@ class TITAN_dataset(Dataset):
                     coord_path = os.path.join(self.sk_coord_path, cid, pid, coord_nm)
                     with open(coord_path, 'rb') as f:
                         coord = pickle.load(f)  # nj, 3
-                    pred_coords.append(coord[:, :2])  # nj, 2
+                    pred_coords.append(coord[:, :2])  # nj, 2(yx)
                 coords = np.stack(coords, axis=0)  # T, nj, 2
                 pred_coords = np.stack(pred_coords, axis=0)  # T, nj, 2
-                try:
-                    obs_skeletons = torch.from_numpy(coords).float().permute(2, 0, 1)  # shape: (2, T, nj)
-                    pred_skeletons = torch.from_numpy(pred_coords).float().permute(2, 0, 1)  # shape: (2, T, nj)
-                    # add offset
-                    obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
-                    pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
-                    if '0-1' in self.sklt_format:
-                        obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
-                        obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
-                        pred_skeletons[0] = pred_skeletons[0] / self.img_size[0]
-                        pred_skeletons[1] = pred_skeletons[1] / self.img_size[1]
-                except:
-                    print('coords shape',coords.shape)
-                    import pdb;pdb.set_trace()
-                    raise NotImplementedError()
+                obs_skeletons = torch.from_numpy(coords).float().permute(2, 0, 1)  # shape: (2, T, nj)
+                pred_skeletons = torch.from_numpy(pred_coords).float().permute(2, 0, 1)  # shape: (2, T, nj)
+                # yx -> xy
+                obs_skeletons = obs_skeletons.flip(0)
+                pred_skeletons = pred_skeletons.flip(0)
+                # add offset
+                obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
+                pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
+
+                if '0-1' in self.sklt_format:
+                    obs_skeletons = norm_sklt(obs_skeletons, self.dataset_name)
+                    pred_skeletons = norm_sklt(pred_skeletons, self.dataset_name)
+                    try:
+                        assert torch.max(obs_skeletons) <= 1 and torch.max(pred_skeletons) <= 1, \
+                        (torch.max(obs_skeletons), torch.max(pred_skeletons))
+                    except:
+                        import pdb;pdb.set_trace()
             else:
                 raise NotImplementedError(self.sklt_format)
             sample['obs_skeletons'] = obs_skeletons

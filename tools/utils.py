@@ -330,10 +330,11 @@ def save_model(model, model_dir, model_name, accu=0, log=print):
     '''
     model: this is not the multigpu model
     '''
+    save_path = os.path.join(model_dir, (model_name + '{0:.4f}.pth').format(accu))
     # torch.save(obj=model.state_dict(), f=os.path.join(model_dir, (model_name + '{0:.4f}.pth').format(accu)))
-    torch.save(obj=model.state_dict(), f=os.path.join(model_dir, (model_name + '{0:.4f}.pth').format(accu)))
+    torch.save(obj=model.state_dict(), f=save_path)
     log('Model saved in ' + model_dir)
-
+    return save_path
 
 def ltrb2xywh(bbox_seq):
     '''
@@ -679,6 +680,7 @@ def get_cls_weights_multi(model,
         multi_weights: dict {tensor: (n_cls,)}
     '''
     act_set_to_attr = {'atomic': 'num_samples_atomic',
+                       'simple': 'num_samples_simple',
                         'complex': 'num_samples_complex',
                         'communicative': 'num_samples_communicative',
                         'transporting': 'num_samples_transporting',

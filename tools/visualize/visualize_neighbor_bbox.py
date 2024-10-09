@@ -26,6 +26,9 @@ def visualize_neighbor_bbox(img, bbox, neighbor_bboxes, weights=None):
     cv2.rectangle(img_copy, (l, t), (r, b), color=(0, 0, 255), thickness=2)
 
     if weights is not None:
+        # normalize weights
+        weights  = weights - np.amin(weights)
+        weights = weights / np.amax(weights)
         # Apply colormap to weights
         colored_weights = apply_colormap(weights) # 1, K, 3
     # Draw the neighbor bboxes

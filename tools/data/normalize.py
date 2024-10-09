@@ -89,7 +89,7 @@ def recover_norm_sklt(sklt, dataset_name):
 
 def sklt_local_to_global(sklt, bbox, sklt_img_size=(384,288)):
     '''
-    sklt: 2 T nj
+    sklt: 2 T nj (xy)
     bbox: T 4 (ltrb)
     '''
     ys = (bbox[:, 1] + bbox[:, 3]) / 2 # T
@@ -102,6 +102,31 @@ def sklt_local_to_global(sklt, bbox, sklt_img_size=(384,288)):
 
     return sklt
 
+def sklt_global_to_local_warning(sklt, bbox, sklt_img_size=(384,288)):
+    '''
+    sklt: 2 T nj
+    bbox: T 4 (ltrb)
+    '''
+    xs = (bbox[:, 0] + bbox[:, 2]) / 2 # T
+    ys = (bbox[:, 1] + bbox[:, 3]) / 2 # T
+    ws = bbox[:, 2] - bbox[:, 0] # T
+    hs = bbox[:, 3] - bbox[:, 1] # T
+
+    T = sklt.shape[1]
+    for t in range(T):
+        if hs[t] <= 0:
+            hs[t] = 1
+            print(f'non-positive hs at {t}: {hs[t]}')
+            raise ValueError()
+        if ws[t] <= 0:
+            ws[t] = 1
+            print(f'non-positive ws at {t}: {ws[t]}')
+            raise ValueError()
+    sklt[1] = (sklt[1] - ys[:, None]) / hs[:, None] * sklt_img_size[0] + sklt_img_size[0]/2
+    sklt[0] = (sklt[0] - xs[:, None]) / ws[:, None] * sklt_img_size[1] + sklt_img_size[1]/2
+
+    return sklt
+
 def sklt_global_to_local(sklt, bbox, sklt_img_size=(384,288)):
     '''
     sklt: 2 T nj
@@ -111,11 +136,17 @@ def sklt_global_to_local(sklt, bbox, sklt_img_size=(384,288)):
     ys = (bbox[:, 1] + bbox[:, 3]) / 2 # T
     ws = bbox[:, 2] - bbox[:, 0] # T
     hs = bbox[:, 3] - bbox[:, 1] # T
-    
-    if 0 in hs or 0 in ws or any(hs < 0) or any(ws < 0):
-        print(f'negtive hs or ws')
-        import pdb;pdb.set_trace()
-        raise ValueError(hs, ws)
+
+    T = sklt.shape[1]
+    for t in range(T):
+        if hs[t] <= 0:
+            print(f'non-positive hs at {t}: {hs[t]}')
+            hs[t] = 1
+            
+        if ws[t] <= 0:
+            print(f'non-positive ws at {t}: {ws[t]}')
+            ws[t] = 1
+            
     sklt[1] = (sklt[1] - ys[:, None]) / hs[:, None] * sklt_img_size[0] + sklt_img_size[0]/2
     sklt[0] = (sklt[0] - xs[:, None]) / ws[:, None] * sklt_img_size[1] + sklt_img_size[1]/2
 

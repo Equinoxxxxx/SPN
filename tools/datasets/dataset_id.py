@@ -1,4 +1,4 @@
-ID2DATASET={
+ID_TO_DATASET={
     0: 'PIE',
     1: 'JAAD',
     2: 'TITAN',
@@ -6,7 +6,7 @@ ID2DATASET={
     4: 'bdd100k',
 }
 
-DATASET2ID={
+DATASET_TO_ID={
     'PIE': 0,
     'JAAD': 1,
     'TITAN': 2,

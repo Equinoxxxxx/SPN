@@ -25,6 +25,7 @@ def get_args():
     parser.add_argument('--overlap1', type=float, default=0.5)
     parser.add_argument('--overlap2', type=float, default=0.5)
     parser.add_argument('--test_overlap', type=float, default=0.5)
+    parser.add_argument('--max_n_neighbor', type=int, default=10)
     parser.add_argument('--dataloader_workers', type=int, default=8)
     parser.add_argument('--shuffle', type=int, default=1)
     # train
@@ -39,8 +40,8 @@ def get_args():
     parser.add_argument('--vis_every', type=int, default=2)
     parser.add_argument('--lr1', type=float, default=0.001)
     parser.add_argument('--lr2', type=float, default=0.001)
-    parser.add_argument('--backbone_lr1', type=float, default=0.001)
-    parser.add_argument('--backbone_lr2', type=float, default=0.001)
+    parser.add_argument('--backbone_lr1', type=float, default=0.0001)
+    parser.add_argument('--backbone_lr2', type=float, default=0.0001)
     parser.add_argument('--scheduler_type1', type=str, default='onecycle')
     parser.add_argument('--scheduler_type2', type=str, default='onecycle')
     parser.add_argument('--onecycle_div_f', type=int, default=10)
@@ -70,9 +71,10 @@ def get_args():
     parser.add_argument('--mono_sem_l1_eff', type=float, default=0.01)
     parser.add_argument('--mono_sem_align_func', type=str, default='cosine_simi')
     parser.add_argument('--mono_sem_align_eff', type=float, default=0.01)
+    parser.add_argument('--cluster_loss_eff', type=float, default=0.01)
     parser.add_argument('--topk', type=int, default=5)
     parser.add_argument('--topk_metric', type=str, default='activation')
-    parser.add_argument('--stoch_mse_type', type=str, default='avg')
+    parser.add_argument('--stoch_mse_type', type=str, default='best')
     # model
     parser.add_argument('--pretrain_mode', type=str, default='contrast')
     parser.add_argument('--model_name', type=str, default='pedspace')
@@ -87,18 +89,22 @@ def get_args():
     parser.add_argument('--proj_bias', type=int, default=1)
     parser.add_argument('--proj_norm', type=str, default='ln')
     parser.add_argument('--proj_actv', type=str, default='leakyrelu')
-    parser.add_argument('--mm_fusion_mode', type=str, default='avg', help='avg/gaussian')
+    parser.add_argument('--mm_fusion_mode', type=str, default='no_fusion', help='avg/gaussian/no_fusion')
     parser.add_argument('--uncertainty', type=str, default='none')
     parser.add_argument('--n_pred_sampling', type=int, default=5)
     # explain
     parser.add_argument('--topk_metric_explain', type=str, default='activation')
-    parser.add_argument('--topk_explain', type=int, default=5)
+    parser.add_argument('--topk_explain', type=int, default=6)
     parser.add_argument('--head_fusion', type=str, default='mean')
+    parser.add_argument('--test_customized_proto', type=int, default=1)
+    parser.add_argument('--proto_rank_criteria', type=str, default='num_select')
+    parser.add_argument('--proto_value_to_rank', type=str, default='abs_weight')
+    parser.add_argument('--proto_num_select', type=int, default=10)
     # modality
     parser.add_argument('--modalities', type=str, default='sklt_ctx_traj_ego_social')
     # img settingf
     parser.add_argument('--img_format', type=str, default='')
-    parser.add_argument('--img_backbone_name', type=str, default='R3D18')
+    parser.add_argument('--img_backbone_name', type=str, default='deeplabv3_resnet50')
     # sk setting
     parser.add_argument('--sklt_format', type=str, default='0-1coord')
     parser.add_argument('--sklt_backbone_name', type=str, default='transformerencoder1D')
@@ -201,12 +207,13 @@ def process_args(args):
         args.pose_mse_eff1 = 1
         args.batch_size1 = 32
         args.key_metric = 'pose_mse'
-    if 'R3D' in args.img_backbone_name or 'csn' in args.mg_backbone_name\
+    if 'R3D' in args.img_backbone_name or 'csn' in args.img_backbone_name\
         or 'R3D' in args.ctx_backbone_name or 'csn' in args.ctx_backbone_name:
         args.img_norm_mode = 'kinetics'
+    
     if args.img_norm_mode in ('kinetics', '0.5', 'activitynet'):
         args.model_color_order = 'RGB'
-    if args.uncertainty != 'gaussian':
+    if args.mm_fusion_mode != 'gaussian':
         args.logsig_loss_eff = 0
 
     args.overlap = [args.overlap1, args.overlap2]
@@ -219,9 +226,14 @@ def process_args(args):
     args.mse_eff = [args.mse_eff1, args.mse_eff2]
     args.pose_mse_eff = [args.pose_mse_eff1, args.pose_mse_eff1]
     args.cls_eff = [args.cls_eff1, args.cls_eff2]
+    if args.act_sets != ['cross']:
+        args.dataset_names = [['TITAN'], ['TITAN']]
+        args.test_dataset_names = [['TITAN'], ['TITAN']]
     for i in range(len(args.dataset_names)):
         if 'nuscenes' in args.dataset_names[i] or 'bdd100k' in args.dataset_names[i]:
             args.cls_eff[i] = 0
+    if len(args.act_sets) == 1:
+        args.key_act_set = args.act_sets[0]
     args.m_settings = {}
     for m in args.modalities:
         args.m_settings[m] = {

@@ -85,4 +85,5 @@ def vis_1d_seq(seq, lim, path, weights=None, mode='below'):
     w, h = canvas.get_width_height()
     img = np.fromstring(canvas.tostring_rgb(), dtype='uint8').reshape(h, w, 3)
     plt.close()
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     return img

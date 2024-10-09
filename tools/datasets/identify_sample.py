@@ -1,13 +1,109 @@
 import os
 from config import dataset_root
+import torch
 
+ID_TO_DATASET={
+    0: 'PIE',
+    1: 'JAAD',
+    2: 'TITAN',
+    3: 'nuscenes',
+    4: 'bdd100k',
+}
+
+DATASET_TO_ID={
+    'PIE': 0,
+    'JAAD': 1,
+    'TITAN': 2,
+    'nuscenes': 3,
+    'bdd100k': 4,
+}
+
+MODALITY_TO_ID = {
+    'img': 0,
+    'sklt': 1,
+    'ctx': 2,
+    'traj': 3,
+    'ego': 4,
+    'social': 5,
+}
+
+ID_TO_MODALITY = {
+    0: 'img',
+    1: 'sklt',
+    2: 'ctx',
+    3: 'traj',
+    4: 'ego',
+    5: 'social',
+}
+
+LABEL_TO_CROSSING = {
+    0: 'not crossing',
+    1: 'crossing',
+}
+
+LABEL_TO_ATOMIC_CHOSEN = {
+    0: 'standing',
+    1: 'running',
+    2: 'bending',
+    3: 'walking',
+    4: 'sitting',
+    5: 'none of above',
+}
+
+LABEL_TO_SIMPLE_CONTEXTUAL = {
+    0: 'crossing a street at pedestrian crossing',
+    1: 'jaywalking',
+    2: 'waiting to cross street',
+    3: 'motorcycling',
+    4: 'biking',
+    5: 'walking along the side of the road',
+    6: 'walking on the road',
+    7: 'cleaning an object',
+    8: 'closing',
+    9: 'opening',
+    10: 'exiting a building',
+    11: 'entering a building',
+    12: 'none of above',
+}
+
+LABEL_TO_COMPLEX_CONTEXTUAL = {
+    0: 'unloading',
+    1: 'loading',
+    2: 'getting in 4 wheel vehicle',
+    3: 'getting out of 4 wheel vehicle',
+    4: 'getting on 2 wheel vehicle',
+    5: 'getting off 2 wheel vehicle',
+    6: 'none of above',
+}
+
+LABEL_TO_COMMUNICATIVE = {
+    0: 'looking into phone',
+    1: 'talking on phone',
+    2: 'talking in group',
+    3: 'none of above',
+}
+
+LABEL_TO_TRANSPORTIVE = {
+    0: 'pushing',
+    1: 'carrying with both hands',
+    2: 'pulling',
+    3: 'none of above',
+}
+
+LABEL_TO_AGE = {
+    0: 'child',
+    1: 'adult',
+    2: 'senior',
+}
 
 def get_ori_img_path(dataset,
-                 set_id=None,  # int
-                 vid_id=None,  # int
-                 img_nm=None,  # int
+                 set_id=None,  # torch.tensor
+                 vid_id=None,  # torch.tensor
+                 img_nm=None,  # torch.tensor
                  ):
-    
+    set_id = set_id.detach().cpu().int().item()
+    vid_id = vid_id.detach().cpu().int().item()
+    img_nm = img_nm.detach().cpu().int().item()
     if dataset.dataset_name == 'TITAN':
         img_root = os.path.join(dataset_root, 'TITAN/honda_titan_dataset/dataset/images_anonymized')
         vid_id = 'clip_'+str(vid_id)
@@ -50,10 +146,14 @@ def get_sklt_img_path(dataset_name,
                  img_nm=None,  # torch.tensor
                  with_sklt=True,
                  ):
-    set_id = set_id.detach().cpu().int().item()
-    vid_id = vid_id.detach().cpu().int().item()
-    obj_id = obj_id.detach().cpu().int().item()
-    img_nm = img_nm.detach().cpu().int().item()
+    if isinstance(set_id, torch.Tensor):
+        set_id = set_id.detach().cpu().int().item()
+    if isinstance(vid_id, torch.Tensor):
+        vid_id = vid_id.detach().cpu().int().item()
+    if isinstance(obj_id, torch.Tensor):
+        obj_id = obj_id.detach().cpu().int().item()
+    if isinstance(img_nm, torch.Tensor):
+        img_nm = img_nm.detach().cpu().int().item()
     dataset_to_extra_root = {
         'bdd100k': 'BDD100k/bdd100k/extra',
         'nuscenes': 'nusc/extra',
@@ -77,7 +177,7 @@ def get_sklt_img_path(dataset_name,
                                 str(img_nm).zfill(6)+'.png')
     elif dataset_name == 'PIE':
         img_path = os.path.join(sklt_img_root,
-                                '_'.join(str(set_id),str(vid_id),str(obj_id)),
+                                '_'.join([str(set_id),str(vid_id),str(obj_id)]),
                                 str(img_nm).zfill(5)+'.png')
     elif dataset_name == 'nuscenes':
         img_path = os.path.join(sklt_img_root,

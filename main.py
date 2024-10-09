@@ -36,9 +36,11 @@ from tools.utils import save_model, seed_all
 from tools.visualize.plot import draw_curves2
 
 from train_test import train_test_epoch
+from customize_proto import customize_proto
 from config import exp_root, dataset_root, cktp_root
 from get_args import get_args, process_args
 from explain import select_topk
+from explain_no_fusion import select_topk_no_fusion
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
@@ -58,7 +60,7 @@ def get_exp_num():
     return exp_num
 
 
-def construct_data_loader(args, log):
+def construct_data_loader(args, log=print):
     datasets = [
         {
         'train':{k:None for k in args.dataset_names[0]},
@@ -104,6 +106,7 @@ def construct_data_loader(args, log):
                                             traj_format=args.traj_format,
                                             ego_format=args.ego_format,
                                             augment_mode=args.augment_mode,
+                                            max_n_neighbor=args.max_n_neighbor,
                                             )
                 if name in ('PIE', 'JAAD'):
                     cur_set = PIEDataset(dataset_name=name, 
@@ -128,7 +131,8 @@ def construct_data_loader(args, log):
                                         tte=args.tte,
                                         recog_act=False,
                                         offset_traj=False,
-                                        augment_mode=args.augment_mode)
+                                        augment_mode=args.augment_mode,
+                                            max_n_neighbor=args.max_n_neighbor,)
                     if subset in ('test', 'val'):
                         cur_set.tte = args.test_tte
                 if name == 'nuscenes':
@@ -147,7 +151,8 @@ def construct_data_loader(args, log):
                                         sklt_format=args.sklt_format,
                                         ctx_format=args.ctx_format,
                                         traj_format=args.traj_format,
-                                        ego_format=args.ego_format
+                                        ego_format=args.ego_format,
+                                            max_n_neighbor=args.max_n_neighbor,
                                         )
                 if name == 'bdd100k':
                     cur_set = BDD100kDataset(subsets=_subset,
@@ -165,7 +170,8 @@ def construct_data_loader(args, log):
                                             ctx_format=args.ctx_format,
                                             traj_format=args.traj_format,
                                             ego_format=args.ego_format,
-                                            augment_mode=args.augment_mode
+                                            augment_mode=args.augment_mode,
+                                            max_n_neighbor=args.max_n_neighbor,
                                             )
                 datasets[stage][subset][name] = cur_set    
     for stage in range(len(datasets)):
@@ -232,9 +238,9 @@ def construct_model(args, device):
         model = PedGraph(modalities=args.modalities,
                          proj_norm=args.proj_norm,
                          proj_actv=args.proj_actv,
-                         pretrain=True,
+                         pretrain=False,
                          act_sets=args.act_sets,
-                         n_mlp=args.n_mlp,
+                         n_mlp=1,
                          proj_dim=args.proj_dim,
                          )
     elif args.model_name == 'sgnet':
@@ -310,6 +316,10 @@ def construct_optimizer_scheduler(args, model, train_loaders):
             optimizer1, milestones=[p1, p2], gamma=0.1
         )
     elif args.model_name == 'PCPA':
+        optimizer1 = torch.optim.Adam(model.parameters(), 
+                                      lr=5e-5, 
+                                      weight_decay=1e-3)
+    elif args.model_name == 'ped_graph':
         optimizer1 = torch.optim.Adam(model.parameters(), 
                                       lr=5e-5, 
                                       weight_decay=1e-3)
@@ -501,6 +511,9 @@ def main(rank, world_size, args):
             'mono_sem_loss': [],
             'mono_sem_l1_loss': [],
             'mono_sem_align_loss': [],
+            'batch_sparsity': [],
+            'all_sparsity':[],
+            'cluster_loss': [],
         }
     for k in args.act_sets:
         metric_dict['cls'][k] = {'acc':[],
@@ -540,6 +553,7 @@ def main(rank, world_size, args):
         'mono_sem_l1_eff': args.mono_sem_l1_eff,
         'mono_sem_align_func': args.mono_sem_align_func,
         'mono_sem_align_eff': args.mono_sem_align_eff,
+        'cluster_loss_eff': args.cluster_loss_eff,
     },
     {
         'mse_eff': args.mse_eff[1],
@@ -557,6 +571,7 @@ def main(rank, world_size, args):
         'mono_sem_l1_eff': args.mono_sem_l1_eff,
         'mono_sem_align_func': args.mono_sem_align_func,
         'mono_sem_align_eff': args.mono_sem_align_eff,
+        'cluster_loss_eff': args.cluster_loss_eff,
     }]
     # best res
     best_val_res = {}
@@ -572,6 +587,10 @@ def main(rank, world_size, args):
                                     'f1':0,
                                     'map':0,}
     best_test_res = copy.deepcopy(best_val_res)
+    best_epoch_all_test_res = [{d:None for d in args.test_dataset_names[0]}]
+    best_epoch_all_test_res.append({d:None for d in args.test_dataset_names[1]})
+    cur_epoch_all_test_res = [{d:None for d in args.test_dataset_names[0]}]
+    cur_epoch_all_test_res.append({d:None for d in args.test_dataset_names[1]})
     best_e = 0
     # stage 1
     log('----------------------------STAGE 1----------------------------')
@@ -624,6 +643,7 @@ def main(rank, world_size, args):
                                             modalities=args.modalities,
                                             loss_params=loss_params[0],
                                             )
+                cur_epoch_all_test_res[0][cur_dataset] = test_res
                 update_res_curve(test_res, curve_dict, cur_dataset, 'test', train_test_plot_dir, 
                                  plot=True)
             # save best results
@@ -633,6 +653,7 @@ def main(rank, world_size, args):
                 log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res[args.key_metric]}')
                 if cur_key_res < best_val_res[args.key_metric]:
                     try:
+                        best_epoch_all_test_res[0] = cur_epoch_all_test_res[0]
                         update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
                     except:
                         import pdb;pdb.set_trace()
@@ -646,28 +667,39 @@ def main(rank, world_size, args):
                     import pdb;pdb.set_trace()
                 if cur_key_res > best_val_res['cls'][args.key_act_set][args.key_metric]:
                     try:
+                        best_epoch_all_test_res[0] = cur_epoch_all_test_res[0]
                         update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
                     except:
                         import pdb;pdb.set_trace()
                     best_e = e
             if local_rank == 0 or not ddp:
-                save_model(model=model, model_dir=ckpt_dir, 
-                            model_name=str(e) + '_',
-                            log=log)
+                model_path = save_model(model=model, model_dir=ckpt_dir, 
+                                        model_name=str(e) + '_',
+                                        log=log)
             log(f'bset epoch: {best_e}')
             log(f'current best val results: {best_val_res}')
             log(f'current best test results: {best_test_res}')
+            log(f'all results of best epoch: {best_epoch_all_test_res[0]}')
         if e%args.explain_every == 0 and args.model_name == 'pedspace':
             log('Selecting topk samples')
             save_root = os.path.join(exp_dir, 'explain', 'stage1_e'+str(e))
             makedir(save_root)
-            select_topk(train_loaders[0], 
-                        model_parallel, 
-                        args, 
-                        device,
-                        modalities=args.modalities,
-                        save_root=save_root,
-                        log=log)
+            if args.mm_fusion_mode == 'no_fusion':
+                select_topk_no_fusion(dataloader=train_loaders[0], 
+                                    model_parallel=model_parallel, 
+                                    args=args, 
+                                    device=device,
+                                    modalities=args.modalities,
+                                    save_root=save_root,
+                                    log=log)
+            else:
+                select_topk(dataloader=train_loaders[0], 
+                            model_parallel=model_parallel, 
+                            args=args, 
+                            device=device,
+                            modalities=args.modalities,
+                            save_root=save_root,
+                            log=log)
                         
     log('----------------------------STAGE 2----------------------------')
     # best res
@@ -733,6 +765,7 @@ def main(rank, world_size, args):
                                             modalities=args.modalities,
                                             loss_params=loss_params[1],
                                             )
+                cur_epoch_all_test_res[1][cur_dataset] = test_res
                 update_res_curve(test_res, curve_dict, cur_dataset, 'test', train_test_plot_dir,
                                  plot=True)
             # save best results
@@ -741,6 +774,7 @@ def main(rank, world_size, args):
                     / len(args.test_dataset_names[1])
                 log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res[args.key_metric]}')
                 if cur_key_res < best_val_res[args.key_metric]:
+                    best_epoch_all_test_res[1] = cur_epoch_all_test_res[1]
                     update_best_res(best_val_res, 
                                     best_test_res, 
                                     curve_dict, 
@@ -751,29 +785,74 @@ def main(rank, world_size, args):
                     / len(args.test_dataset_names[1])
                 log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res["cls"][args.key_act_set][args.key_metric]}')
                 if cur_key_res > best_val_res['cls'][args.key_act_set][args.key_metric]:
+                    best_epoch_all_test_res[1] = cur_epoch_all_test_res[1]
                     update_best_res(best_val_res, 
                                     best_test_res, 
                                     curve_dict, 
                                     args.test_dataset_names[1])
                     best_e = e
             if local_rank == 0 or not ddp:
-                save_model(model=model, model_dir=ckpt_dir, 
-                            model_name=str(e) + '_',
-                            log=log)
+                model_path = save_model(model=model, model_dir=ckpt_dir, 
+                                        model_name=str(e) + '_',
+                                        log=log)
             log(f'bset epoch: {best_e}')
             log(f'current best val results: {best_val_res}')
             log(f'current best test results: {best_test_res}')
+            log(f'all results of best epoch: {best_epoch_all_test_res[1]}')
         # explain
         if e%args.explain_every == 0 and args.model_name == 'pedspace':
             save_root = os.path.join(exp_dir, 'explain', 'stage2_e'+str(e))
             makedir(save_root)
-            select_topk(train_loaders[0], 
-                        model_parallel, 
-                        args, 
-                        device,
-                        modalities=args.modalities,
-                        save_root=save_root,
-                        log=log)
+            if args.mm_fusion_mode == 'no_fusion':
+                select_topk_no_fusion(dataloader=train_loaders[0], 
+                                    model_parallel=model_parallel, 
+                                    args=args, 
+                                    device=device,
+                                    modalities=args.modalities,
+                                    save_root=save_root,
+                                    log=log)
+            else:
+                select_topk(dataloader=train_loaders[0], 
+                            model_parallel=model_parallel, 
+                            args=args, 
+                            device=device,
+                            modalities=args.modalities,
+                            save_root=save_root,
+                            log=log)
+    if args.model_name == 'pedspace' and args.test_customized_proto:
+        log('----------------------------Customize proto----------------------------')
+        model = construct_model(args, device)
+        model.load_state_dict(torch.load(model_path))
+        model = model.float().to(device)
+        model_parallel = torch.nn.parallel.DataParallel(model)
+        model_parallel.eval()
+        model_parallel = customize_proto(args, model_parallel)
+        if args.epochs2 > 0:
+            final_test_loaders = test_loaders[1]
+            final_test_dataset_names = args.test_dataset_names[1]
+            final_loss_params = loss_params[1]
+        else:
+            final_test_loaders = test_loaders[0]
+            final_test_dataset_names = args.test_dataset_names[0]
+            final_loss_params = loss_params[0]
+        customize_proto_res = {d:None for d in final_test_dataset_names}
+        for test_loader in final_test_loaders:
+            cur_dataset = test_loader.dataset.dataset_name
+            log(cur_dataset)
+            test_res = train_test_epoch(args,
+                                        model=model_parallel,
+                                        model_name=args.model_name,
+                                        dataloader=test_loader,
+                                        optimizer=None,
+                                        scheduler=None,
+                                        log=log,
+                                        device=device,
+                                        modalities=args.modalities,
+                                        loss_params=final_loss_params,
+                                        )
+            customize_proto_res[cur_dataset] = test_res
+        log(f'Customize proto results\n  {customize_proto_res}')
+
     log(f'Exp {exp_num} finished')                    
     logclose()
     with open(os.path.join(train_test_plot_dir, 'curve_dict.pkl'), 'wb') as f:

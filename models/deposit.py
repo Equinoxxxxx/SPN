@@ -302,10 +302,10 @@ class Deposit(nn.Module):
             input_seq = inputs['traj']  # B obslen 4
             gt_seq = targets['pred_traj']  # B predlen 4
             batch_size = input_seq.size(0)
-            obslen = input_seq.size(2)
-            predlen = gt_seq.size(2)
-            seq = torch.concat([input_seq, gt_seq], 2)  # B 4 obslen+predlen
-            # seq = seq.permute(0,2,1)  # B obslen+predlen 4
+            obslen = input_seq.size(1)
+            predlen = gt_seq.size(1)
+            seq = torch.concat([input_seq, gt_seq], 1)  # B obslen+predlen 4
+            seq = seq.permute(0,2,1)  # B obslen+predlen 4 -> B 4 obslen+predlen
 
         mask = torch.zeros_like(seq).to(seq.device).float()  # B C obslen+predlen
         mask[:, :, :obslen] = 1

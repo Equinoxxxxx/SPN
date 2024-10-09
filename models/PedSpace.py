@@ -45,6 +45,9 @@ class PedSpace(nn.Module):
             self.do_pred_traj = True
         if args.pose_mse_eff1 > 0 or args.pose_mse_eff2 > 0:
             self.do_pred_pose = True
+        self.logit_scale = nn.parameter.Parameter(
+            torch.ones([]) * np.log(1 / 0.07))
+        self.all_sparsity = None
         # encoders
         self.encoders = {}
         for m in self.modalities:
@@ -130,22 +133,30 @@ class PedSpace(nn.Module):
                     modality_effs[m] = effs[1].mean(-1)
             eps = torch.randn(mu.shape[0], mu.shape[1], device=mu.device)  # B d
             feat_fused = mu + eps*torch.exp(sig)  # B d
-        elif self.mm_fusion_mode == 'avg':
-            modality_effs = {m: torch.ones(inputs.shape[0]) for m in self.modalities}
-            feat_fused = torch.stack(list(out.values()), dim=2).mean(dim=2)  # B d
+        
+        elif self.mm_fusion_mode in ('avg', 'no_fusion'):
+            modality_effs = {m: torch.ones(inputs[m].shape[0]).to(out[m].device) for m in self.modalities}
+            feat_fused = torch.stack(list(out.values()), dim=2).mean(dim=2)  # B d M -> B d
         else:
             raise ValueError(self.mm_fusion_mode)
         # projection to proto
-        try:
-            proto_simi = self.proto_enc(feat_fused)  # B n_proto
-        except:
-            import pdb; pdb.set_trace()
+        proto_simi = self.proto_enc(feat_fused)  # B n_proto
         if not self.linear_proto_enc:
             proto_simi = self.proto_enc_actv(proto_simi)
+        # mm proto_simi
+        mm_proto_simi = None
+        if self.mm_fusion_mode == 'no_fusion':
+            mm_proto_simi = {}
+            for m in self.modalities:
+                mm_proto_simi[m] = self.proto_enc(out[m])
+                if not self.linear_proto_enc:
+                    mm_proto_simi[m] = self.proto_enc_actv(mm_proto_simi[m])
         # decoders
         preds = {'feat': feat,
+                 'enc_out': out,
                  'modality_effs': modality_effs,
                 'proto_simi': proto_simi,
+                'mm_proto_simi': mm_proto_simi,
                 'cls_logits': {}, 
                  'pred_traj': None, 
                  'pred_pose': None,
@@ -156,23 +167,23 @@ class PedSpace(nn.Module):
         # pred traj
         if self.do_pred_traj:
             if self.traj_dec_name == 'deposit':
-                out = self.traj_decoder(batch, 
+                deposit_out = self.traj_decoder(batch, 
                                         n_samples=self.n_pred_sampling,
                                         mm_cond=feat_fused,
                                         is_train=is_train)
-                preds['traj_loss'] = out['loss']
-                preds['pred_traj'] = out['pred']
+                preds['traj_loss'] = deposit_out['loss']
+                preds['pred_traj'] = deposit_out['pred']
             else:
                 raise ValueError(self.traj_dec_name)
         # pred pose
         if self.do_pred_pose:
             if self.pose_dec_name == 'deposit':
-                out = self.pose_decoder(batch, 
+                deposit_out = self.pose_decoder(batch, 
                                         n_samples=self.n_pred_sampling,
                                         mm_cond=feat_fused,
                                         is_train=is_train)
-                preds['pose_loss'] = out['loss']
-                preds['pred_pose'] = out['pred']
+                preds['pose_loss'] = deposit_out['loss']
+                preds['pred_pose'] = deposit_out['pred']
             else:
                 raise ValueError(self.pose_dec_name)
         return preds
@@ -182,7 +193,7 @@ class PedSpace(nn.Module):
         other_params = []
         for n, p in self.named_parameters():
             if 'backbone' in n and \
-                ('img' in n or 'ctx' in n or 'sklt' in n and 'poseC3D' in n):
+                ('img' in n or 'ctx' in n or ('sklt' in n and 'poseC3D' in n)):
                 bb_params.append(p)
             else:
                 other_params.append(p)
@@ -203,14 +214,19 @@ class SingleBranch(nn.Module):
         self.proj_actv = args.proj_actv
         self.head_fusion = args.head_fusion
         self.backbone_name = getattr(args, f'{self.modality}_backbone_name')
-        self.backbone = create_backbone(self.backbone_name, modality=self.modality)
+        self.backbone = create_backbone(self.backbone_name, 
+                                        modality=self.modality,
+                                        args=args)
         self.proj_pooling = None
         # pooling layer
-        if '3D' in self.backbone_name:
+        if 'flat' in self.backbone_name:
+            self.proj_pooling = nn.Flatten()
+        elif '3D' in self.backbone_name:
             self.proj_pooling = nn.AdaptiveAvgPool3d(1) if args.pool == 'avg' else nn.AdaptiveMaxPool3d(1)
         elif '1D' in self.backbone_name:
             self.proj_pooling = nn.AdaptiveAvgPool1d(1) if args.pool == 'avg' else nn.AdaptiveMaxPool1d(1)
-        elif 'deeplab' in self.backbone_name or 'vit' in self.backbone_name:
+        elif 'deeplab' in self.backbone_name or 'vit' in self.backbone_name or \
+            'pedgraphconv' in self.backbone_name or '2D' in self.backbone_name:
             self.proj_pooling = nn.AdaptiveAvgPool2d(1) if args.pool == 'avg' else nn.AdaptiveMaxPool2d(1)
         feat_dim = LAST_DIM[self.backbone_name]
         # proj layer
@@ -233,11 +249,12 @@ class SingleBranch(nn.Module):
             # B K T 5 --> B 5 T K
             x = x.permute(0, 3, 2, 1)
         feat = self.backbone(x)
-        # B C ...
-        B, C = feat.size(0), feat.size(1)
+        
         out = feat
         if self.proj_pooling is not None:
             out = self.proj_pooling(feat)
+        # B C ...
+        B, C = out.size(0), out.size(1)
         out = out.reshape(B, C)  # B C 1 --> B C
         out = self.proj_layers(out)
 

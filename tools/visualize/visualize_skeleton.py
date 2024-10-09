@@ -3,9 +3,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torchvision
 import ffmpeg
+import torch
 
 from ..data.normalize import norm_imgs, recover_norm_imgs, \
-    img_mean_std_BGR, sklt_local_to_global, sklt_global_to_local
+    img_mean_std_BGR, sklt_local_to_global, sklt_global_to_local, sklt_global_to_local_warning
 from ..data.get_skeletons import generate_one_pseudo_heatmap
 
 
@@ -197,10 +198,12 @@ def draw_points_and_skeleton(image, points, skeleton, points_color_palette='tab2
 def visualize_sklt_with_pseudo_heatmap(imgs, sklts, feats, bboxs, dataset_name, save_dir):
     '''
     imgs: ndarray T H W C
-    sklts: tensor T nj 2
+    sklts: tensor/ndarray T nj 2
     feats:  T nj
     bboxs:  T 4
     '''
+    if isinstance(sklts, torch.Tensor):
+        sklts = sklts.cpu().float().numpy()
     dataset_to_img_size = {
         'TITAN': (1520, 2704),
         'PIE': (1080, 1920),
@@ -211,13 +214,20 @@ def visualize_sklt_with_pseudo_heatmap(imgs, sklts, feats, bboxs, dataset_name, 
     H, W = dataset_to_img_size[dataset_name]
     T, h, w, _ = imgs.shape
     nj = feats.shape[1]
-    sklt_loc = sklt_global_to_local(sklts.permute(2,0,1).float(), bboxs.astype(np.float32)) # 2 T nj
-    sklt_loc = sklt_loc.permute(1,2,0).int().cpu().numpy() # T nj 2
+    try:
+        sklt_loc = sklt_global_to_local_warning(sklts.transpose(2,0,1), bboxs.astype(np.float32)) # 2 T nj
+    except:
+        # import pdb; pdb.set_trace()
+        sklt_loc = sklt_global_to_local(sklts.transpose(2,0,1), bboxs.astype(np.float32)) # 2 T nj
+    sklt_loc = sklt_loc.transpose(1,2,0) # T nj 2
     heatmaps = []
     for t in range(T):
         img = imgs[t]
         sklt = sklt_loc[t]
         feat = feats[t]
+        # normalize feat
+        feat = feat - np.amin(feat)
+        feat = feat / (np.amax(feat) + 1e-8)
         heatmap = generate_one_pseudo_heatmap(h, w, sklt, feat, sigma=w//40) # h w
         heatmap = np.expand_dims(heatmap, axis=-1) # h w 1
         heatmaps.append(heatmap)
@@ -225,8 +235,6 @@ def visualize_sklt_with_pseudo_heatmap(imgs, sklts, feats, bboxs, dataset_name, 
     # max min norm
     heatmaps = heatmaps - np.amin(heatmaps)
     heatmaps = heatmaps / (np.amax(heatmaps) + 1e-8)
-    print(np.amin(heatmaps), np.amax(heatmaps), np.argmax(heatmaps))
-    print(sklts)
     overlay_imgs = []
     for t in range(T):
         img = imgs[t]

@@ -421,7 +421,9 @@ class Next(nn.Module):
         enc_last_state_list.append(kp_obs_enc_last_state)
 
         # encode person scene
-        obs_personscene = batch['ctx'][:, -1] # B 4 H W -> B H W
+        obs_personscene = batch['ctx'][:, -1] # B 4 (T) H W -> B (T) H W
+        if len(obs_personscene.shape) == 4:
+            obs_personscene = obs_personscene[:,-1]
         try:
             obs_personscene = F.one_hot(obs_personscene.long(), self.n_seg)  # B H W n_seg
         except:

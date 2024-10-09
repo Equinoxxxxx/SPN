@@ -10,6 +10,7 @@ from tools.loss.mse_loss import sgnet_rmse_loss, calc_mse
 from tools.loss.cvae_loss import sgnet_cvae_loss, calc_stoch_mse
 from tools.loss.mono_sem_loss import calc_topk_monosem, calc_mono_sem_align_loss
 from tools.loss.diversity_loss import calc_diversity_loss
+from tools.loss.cluster_loss import calc_batch_simi_simple, calc_contrast_loss
 from tools.metrics import calc_acc, calc_auc, calc_confusion_matrix, calc_f1, \
     calc_mAP, calc_precision, calc_recall
 from models.SGNet import accumulate_traj, traj_to_sgnet_target
@@ -81,7 +82,9 @@ def train_test_epoch(args,
     total_mono_sem_loss = 0
     total_mono_sem_l1_loss = 0
     total_mono_sem_align_loss = 0
-    total_sparsity = 0
+    total_batch_sparsity = 0
+    total_cluster_loss = 0
+    all_proto_simi = []
     # targets and logits for whole epoch
     targets_e = {}
     logits_e = {}
@@ -109,6 +112,7 @@ def train_test_epoch(args,
         targets = {}
         targets['cross'] = data['pred_act'].to(device).view(-1) # idx, not one hot
         targets['atomic'] = data['atomic_actions'].to(device).view(-1)
+        targets['simple'] = data['simple_context'].to(device).view(-1)
         targets['complex'] = data['complex_context'].to(device).view(-1)
         targets['communicative'] = data['communicative'].to(device).view(-1)
         targets['transporting'] = data['transporting'].to(device).view(-1)
@@ -268,21 +272,26 @@ def train_test_epoch(args,
                                                    weight=cls_weights_multi[k])
                         loss = loss + ce_dict[k] * loss_params['cls_eff']
                 # top k mono loss
-                proto_simi = out['proto_simi']  # B P
-                sparsity, topk_indices = calc_topk_monosem(proto_simi, 
+                if args.mm_fusion_mode == 'no_fusion':
+                    proto_simi = [out['mm_proto_simi'][m] for m in out['mm_proto_simi']]
+                    proto_simi = torch.cat(proto_simi, dim=0)  # B*M P
+                else:
+                    proto_simi = out['proto_simi']  # B P
+                all_proto_simi.append(proto_simi.detach().cpu())
+                batch_sparsity, topk_indices = calc_topk_monosem(proto_simi, 
                                                             args.topk,
                                                             args.topk_metric)
-                total_sparsity += sparsity.mean().item()
+                total_batch_sparsity += batch_sparsity.mean().item()
                 if loss_params['diversity_loss_eff'] > 0:
                     diversity_loss = calc_diversity_loss(model.module.proto_enc.weight)
                     total_diversity_loss += diversity_loss.item()
                     loss = loss + diversity_loss * loss_params['diversity_loss_eff']
                 if loss_params['mono_sem_eff'] > 0:
-                    mono_sem_loss = -sparsity.mean()
+                    mono_sem_loss = -batch_sparsity.mean()
                     total_mono_sem_loss += mono_sem_loss.item()
                     loss = loss + mono_sem_loss * loss_params['mono_sem_eff']
                 if loss_params['mono_sem_l1_eff'] > 0:
-                    mono_sem_l1_loss = sparsity.abs().mean()
+                    mono_sem_l1_loss = batch_sparsity.abs().mean()
                     total_mono_sem_l1_loss += mono_sem_l1_loss.item()
                     loss = loss + mono_sem_l1_loss * loss_params['mono_sem_l1_eff']
                 if loss_params['mono_sem_align_eff'] > 0 and loss_params['cls_eff'] > 0:
@@ -290,10 +299,19 @@ def train_test_epoch(args,
                     for act_set in logits:
                         weights = model.module.proto_dec[act_set].weight  # n_cls, n_proto
                         mono_sem_align_loss += calc_mono_sem_align_loss(weights, 
-                                                                        sparsity,
+                                                                        batch_sparsity,
                                                                         loss_params['mono_sem_align_func'])
                     total_mono_sem_align_loss += mono_sem_align_loss.item()
                     loss = loss + mono_sem_align_loss * loss_params['mono_sem_align_eff']
+                if loss_params['cluster_loss_eff'] > 0:
+                    modality_simi_mats = calc_batch_simi_simple(feat_dict=out['enc_out'],
+                                                                log_logit_scale=model.module.logit_scale,
+                                                                simi_func='dot_prod',
+                                                                pair_mode='pair_wise')
+                    cluster_loss = calc_contrast_loss(modality_simi_mats,
+                                                       pair_mode='pair_wise')
+                    loss = loss + cluster_loss * loss_params['cluster_loss_eff']
+                    total_cluster_loss += cluster_loss.item()
             else:
                 raise NotImplementedError()
             # backward
@@ -319,14 +337,21 @@ def train_test_epoch(args,
                 display_dict['logit'] = [round(logits['cross'][0, 0].item(), 4), round(logits['cross'][0, 1].item(), 4)]
                 display_dict['avg logit'] = [round(mean_logit[0].item(), 4), round(mean_logit[1].item(), 4)]
         tbar.set_postfix(display_dict)
-        # del inputs
-        del data
+        del inputs
         if is_train:
             del loss
         torch.cuda.empty_cache()
-        if n_iter%50 == 0 or True:
+        if n_iter%50 == 0:
             print(f'cur mem allocated: {torch.cuda.memory_allocated(device)}')
 
+    # calc epoch wise metric
+    # all sparsity
+    if args.model_name == 'pedspace':
+        all_proto_simi = torch.cat(all_proto_simi, dim=0)  # n_samples(*M) P
+        all_sparsity, all_topk_indices = calc_topk_monosem(proto_simi, 
+                                                        args.topk,
+                                                        args.topk_metric)
+        model.module.all_sparsity = all_sparsity # P,
     # calc metric
     acc_e = {}
     f1_e = {}
@@ -413,7 +438,13 @@ def train_test_epoch(args,
     if loss_params['mono_sem_align_eff'] > 0:
         res['mono_sem_align_loss'] = total_mono_sem_align_loss / (n_iter+1)
         log(f'\t mono_sem_align_loss: {total_mono_sem_align_loss / (n_iter+1)}')
+    if loss_params['cluster_loss_eff'] > 0:
+        res['cluster_loss'] = total_cluster_loss / (n_iter+1)
+        log(f'\t cluster_loss: {total_cluster_loss / (n_iter+1)}')
     if model_name == 'pedspace':
-        log(f'\t mean top k relative var: {total_sparsity / (n_iter+1)}')
+        res['batch_sparsity'] = total_batch_sparsity / (n_iter+1)
+        log(f'\t mean batch sparsity: {total_batch_sparsity / (n_iter+1)}')
+        res['all_sparsity'] = all_sparsity.mean().item()
+        log(f'\t all sparsity: {all_sparsity.mean().item()}')
     log('\n')
     return res

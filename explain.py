@@ -4,10 +4,13 @@ from tqdm import tqdm
 import os
 import cv2
 import copy
+import argparse
+import os
+import pickle
 
 from tools.utils import makedir, write_info_txt
 from tools.datasets.identify_sample import get_ori_img_path, get_sklt_img_path
-from tools.datasets.dataset_id import ID2DATASET
+from tools.datasets.dataset_id import ID_TO_DATASET
 from tools.data.normalize import recover_norm_imgs, img_mean_std_BGR, recover_norm_sklt, recover_norm_bbox
 from tools.visualize.heatmap import visualize_featmap3d
 from tools.visualize.visualize_skeleton import visualize_sklt_with_pseudo_heatmap
@@ -170,8 +173,9 @@ def select_topk(dataloader,
                                   for act in model_parallel.module.proto_dec.keys()}
         cur_p_rel_var = top_k_relative_var[:,p].mean().cpu().numpy()
         explain_info.append({'mean_rel_var':cur_p_rel_var,
-                                        'last_weights':last_weights_cur_proto,
-                                        'sample_info':[]})
+                                'last_weights':last_weights_cur_proto,
+                                'sample_info':[],
+                                'proto_id':p})
         for k in range(K):
             sample_idx = top_k_indices[k,p]
             proto_simi = copy.deepcopy(all_proto_simi[sample_idx].detach().cpu().numpy()) # P
@@ -319,8 +323,8 @@ def select_topk(dataloader,
                     vid_id = all_sample_ids['vid_id_int'][sam_idx]
                     img_nms = all_sample_ids['img_nm_int'][sam_idx]
                     obj_id = all_sample_ids['ped_id_int'][sam_idx]
-                    dataset_name = all_sample_ids['dataset_name'][sam_idx].item()
-                    dataset_name = ID2DATASET[dataset_name]  # int --> str
+                    dataset_name = all_sample_ids['dataset_name'][sam_idx].detach().item()
+                    dataset_name = ID_TO_DATASET[dataset_name]  # int --> str
                     sklt_coords = copy.deepcopy(all_sklt[sam_idx,:].detach().cpu())  # 2 T nj
                     # de-normalize
                     if '0-1' in args.sklt_format:
@@ -367,12 +371,12 @@ def select_topk(dataloader,
                 save_path = os.path.join(save_root, str(p), str(k), 'traj')
                 makedir(save_path)
                 sam_idx = top_k_indices[k,p]
-                set_id = all_sample_ids['set_id_int'][sam_idx].detach().numpy()
-                vid_id = all_sample_ids['vid_id_int'][sam_idx].detach().numpy()
-                img_nms = all_sample_ids['img_nm_int'][sam_idx].detach().numpy()
-                obj_id = all_sample_ids['ped_id_int'][sam_idx].detach().numpy()
-                dataset_name = all_sample_ids['dataset_name'][sam_idx].item()
-                dataset_name = ID2DATASET[dataset_name]  # int --> str
+                set_id = all_sample_ids['set_id_int'][sam_idx]
+                vid_id = all_sample_ids['vid_id_int'][sam_idx]
+                img_nms = all_sample_ids['img_nm_int'][sam_idx]
+                obj_id = all_sample_ids['ped_id_int'][sam_idx]
+                dataset_name = all_sample_ids['dataset_name'][sam_idx].detach().item()
+                dataset_name = ID_TO_DATASET[dataset_name]  # int --> str
                 traj = copy.deepcopy(all_traj[sam_idx].detach().cpu().numpy())
                 # de-normalize
                 if '0-1' in args.traj_format:
@@ -429,12 +433,12 @@ def select_topk(dataloader,
                     save_path = os.path.join(save_root, str(p), str(k), 'social')
                     makedir(save_path)
                     sam_idx = top_k_indices[k,p]
-                    set_id = all_sample_ids['set_id_int'][sam_idx].cpu().detach().numpy()
-                    vid_id = all_sample_ids['vid_id_int'][sam_idx].cpu().detach().numpy()
-                    img_nms = all_sample_ids['img_nm_int'][sam_idx].cpu().detach().numpy()
-                    obj_id = all_sample_ids['ped_id_int'][sam_idx].cpu().detach().numpy()
+                    set_id = all_sample_ids['set_id_int'][sam_idx].cpu()
+                    vid_id = all_sample_ids['vid_id_int'][sam_idx].cpu()
+                    img_nms = all_sample_ids['img_nm_int'][sam_idx].cpu()
+                    obj_id = all_sample_ids['ped_id_int'][sam_idx].cpu()
                     dataset_name = all_sample_ids['dataset_name'][sam_idx].item()
-                    dataset_name = ID2DATASET[dataset_name]  # int --> str
+                    dataset_name = ID_TO_DATASET[dataset_name]  # int --> str
                     traj = copy.deepcopy(all_traj[sam_idx, :].detach().cpu().numpy())
                     # # de-normalize
                     if '0-1' in args.traj_format:
@@ -469,6 +473,7 @@ def plot_all_explanation(explain_info, path, part_height=250, part_width=250, sp
     '''
     explain_info: P*[{'mean_rel_var':float, 
                       'last_weights':{act:array}, 
+                        'proto_id':int,
                       'sample_info':[{'rel_var':float,
                                       'labels':{act:int}, 
                                       'images':{modality:array}, 
@@ -485,6 +490,9 @@ def plot_all_explanation(explain_info, path, part_height=250, part_width=250, sp
     K = len(explain_info[0]['sample_info'])
     M = len(explain_info[0]['sample_info'][0]['images'])
 
+    # rank by mean_rel_var
+    explain_info = sorted(explain_info, key=lambda x: x['mean_rel_var'], reverse=True)
+
     # Calculate the total height and width of the canvas
     total_height = P * K * (part_height + spacing)
     total_width = (M+3) * (part_width + spacing)
@@ -497,7 +505,7 @@ def plot_all_explanation(explain_info, path, part_height=250, part_width=250, sp
         
         # Draw mean_rel_var
         mean_rel_var = block['mean_rel_var']
-        proto_title = f'prototype {i}'
+        proto_title = f'prototype {block["proto_id"]}'
         mean_rel_var_text = f"mean_rel_var: {round(float(mean_rel_var),3)}"
         cv2.putText(canvas, proto_title, (spacing, block_y_offset + 15), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
@@ -533,15 +541,15 @@ def plot_all_explanation(explain_info, path, part_height=250, part_width=250, sp
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
         
         # Draw last_weights
-        weights_y_offset = block_y_offset + K * (part_height + spacing) // 2
+        weights_y_offset = block_y_offset + spacing
         for act, cls in block['last_weights'].items():
             weights_text = f"{act}:"
-            cv2.putText(canvas, weights_text, ((M+2)*(part_width+spacing) - spacing, weights_y_offset), 
+            cv2.putText(canvas, weights_text, ((M+2)*(part_width+spacing), weights_y_offset), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
             weights_cls_y_offset = weights_y_offset + 20
             for c in range(len(cls)):
                 weights_text = f"  {c}: {round(float(cls[c]),3)}"
-                cv2.putText(canvas, weights_text, ((M+2)*(part_width+spacing) - spacing, weights_cls_y_offset), 
+                cv2.putText(canvas, weights_text, ((M+2)*(part_width+spacing), weights_cls_y_offset), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
                 weights_cls_y_offset += 20
             weights_y_offset += spacing
@@ -550,3 +558,5 @@ def plot_all_explanation(explain_info, path, part_height=250, part_width=250, sp
     cv2.imwrite(path, canvas)
 
     return canvas
+
+

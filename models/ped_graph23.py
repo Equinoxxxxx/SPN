@@ -6,7 +6,6 @@ from tools.datasets.TITAN import ACT_SET_TO_N_CLS
     
 
 class PedGraph(nn.Module):
-
     def __init__(self, 
                  modalities=['sklt', 'ctx', 'ego'],
                  act_sets=['cross'], 
@@ -171,6 +170,8 @@ class PedGraph(nn.Module):
     def forward(self, x): 
         kp = x.get('sklt')
         frame = x.get('ctx')  # b 4 h w
+        if len(frame.shape) == 5:  # b 4 t h w
+            frame = frame[:, :, -1]
         B, C, T, V = kp.shape  # b, 2, t, 17
         kp = kp.permute(0, 1, 3, 2).contiguous().view(B, C * V, T)  # b 2*17, t
         kp = self.data_bn(kp)

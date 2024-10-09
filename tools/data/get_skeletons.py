@@ -45,7 +45,6 @@ def generate_one_pseudo_heatmap(img_h, img_w, centers, max_values, sigma=0.6, ep
             if not (len(x) and len(y)):
                 continue
             y = y[:, None]
-
             patch = np.exp(-((x - mu_x)**2 + (y - mu_y)**2) / 2 / sigma**2)
             patch = patch * max_value
             heatmap[st_y:ed_y,
@@ -64,10 +63,6 @@ def extract_single(model, img_path, dataset='coco'):
                                              points_palette_samples=17, confidence_threshold=0.)
     # pdb.set_trace()
     return heatmap_img, joints, heatmaps[0]
-
-def get_skeletons_PIE():
-    imgroot = os.path.join(dataset_root,
-                           '')
 
 
 def get_skeletons_nuscenes(img_root=os.path.join(dataset_root, 
@@ -122,7 +117,7 @@ def get_skeletons_nuscenes(img_root=os.path.join(dataset_root,
             h_ratio = pseudo_h / ori_h
             w_ratio = pseudo_w / ori_w
             pseudo_heatmaps = []
-            for coord in coords:  # x, y, confidence
+            for coord in coords:  # y, x, confidence
                 tgt_h = int(coord[0] * h_ratio)
                 tgt_w = int(coord[1] * w_ratio)
                 tgt_coord = (tgt_w, tgt_h)
@@ -201,7 +196,7 @@ def get_skeleton_bdd100k(img_root=os.path.join(dataset_root,
             h_ratio = pseudo_h / ori_h
             w_ratio = pseudo_w / ori_w
             pseudo_heatmaps = []
-            for coord in coords:  # x, y, confidence
+            for coord in coords:  # y, x, confidence
                 tgt_h = int(coord[0] * h_ratio)
                 tgt_w = int(coord[1] * w_ratio)
                 tgt_coord = (tgt_w, tgt_h)
@@ -279,7 +274,7 @@ def get_skeletons(datasets):
                 h_ratio = pseudo_h / ori_h
                 w_ratio = pseudo_w / ori_w
                 pseudo_heatmaps = []
-                for coord in coords:  # x, y, confidence
+                for coord in coords:  # y, x, confidence
                     tgt_h = int(coord[0] * h_ratio)
                     tgt_w = int(coord[1] * w_ratio)
                     tgt_coord = (tgt_w, tgt_h)
@@ -347,7 +342,7 @@ def get_skeletons(datasets):
                 h_ratio = pseudo_h / ori_h
                 w_ratio = pseudo_w / ori_w
                 pseudo_heatmaps = []
-                for coord in coords:  # x, y, confidence
+                for coord in coords:  # y, x, confidence
                     tgt_h = int(coord[0] * h_ratio)
                     tgt_w = int(coord[1] * w_ratio)
                     tgt_coord = (tgt_w, tgt_h)
@@ -416,7 +411,7 @@ def get_skeletons(datasets):
                     h_ratio = pseudo_h / ori_h
                     w_ratio = pseudo_w / ori_w
                     pseudo_heatmaps = []
-                    for coord in coords:  # x, y, confidence
+                    for coord in coords:  # y, x, confidence
                         tgt_h = int(coord[0] * h_ratio)
                         tgt_w = int(coord[1] * w_ratio)
                         tgt_coord = (tgt_w, tgt_h)
@@ -497,7 +492,7 @@ def get_skeletons(datasets):
                 h_ratio = pseudo_h / ori_h
                 w_ratio = pseudo_w / ori_w
                 pseudo_heatmaps = []
-                for coord in coords:  # x, y, confidence
+                for coord in coords:  # y, x, confidence
                     tgt_h = int(coord[0] * h_ratio)
                     tgt_w = int(coord[1] * w_ratio)
                     tgt_coord = (tgt_w, tgt_h)
@@ -571,7 +566,7 @@ def get_skeletons(datasets):
                 h_ratio = pseudo_h / ori_h
                 w_ratio = pseudo_w / ori_w
                 pseudo_heatmaps = []
-                for coord in coords:  # x, y, confidence
+                for coord in coords:  # y, x, confidence
                     tgt_h = int(coord[0] * h_ratio)
                     tgt_w = int(coord[1] * w_ratio)
                     tgt_coord = (tgt_w, tgt_h)

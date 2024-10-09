@@ -20,10 +20,10 @@ from .pie_data import PIE
 from .jaad_data import JAAD
 from ..utils import mapping_20, makedir, ltrb2xywh, coord2pseudo_heatmap, cls_weights
 from ..data.transforms import RandomHorizontalFlip, RandomResizedCrop, crop_local_ctx
-from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global
+from ..data.normalize import img_mean_std_BGR, norm_imgs, sklt_local_to_global, norm_bbox, norm_sklt
 from ..general import HiddenPrints
 from ..data.bbox import bbox2d_relation_multi_seq, pad_neighbor
-from .dataset_id import DATASET2ID, ID2DATASET
+from .dataset_id import DATASET_TO_ID, ID_TO_DATASET
 from config import dataset_root
 
 
@@ -263,7 +263,7 @@ class PIEDataset(Dataset):
         
         # add seg maps in samples
         if 'ctx' in self.modalities:
-            if self.ctx_format == 'ped_graph':
+            if self.ctx_format in ('ped_graph', 'ped_graph_seg'):
                 ctx_format_dir = 'ori_local'
             else:
                 ctx_format_dir = self.ctx_format
@@ -333,24 +333,12 @@ class PIEDataset(Dataset):
         pred_bbox_ori = copy.deepcopy(pred_bbox)
         # normalize the coordinates
         if '0-1' in self.traj_format:
-            obs_bbox_offset[:, 0] /= self.img_size[1]
-            obs_bbox_offset[:, 2] /= self.img_size[1]
-            obs_bbox_offset[:, 1] /= self.img_size[0]
-            obs_bbox_offset[:, 3] /= self.img_size[0]
-            pred_bbox_offset[:, 0] /= self.img_size[1]
-            pred_bbox_offset[:, 2] /= self.img_size[1]
-            pred_bbox_offset[:, 1] /= self.img_size[0]
-            pred_bbox_offset[:, 3] /= self.img_size[0]
-            obs_bbox[:, 0] /= self.img_size[1]
-            obs_bbox[:, 2] /= self.img_size[1]
-            obs_bbox[:, 1] /= self.img_size[0]
-            obs_bbox[:, 3] /= self.img_size[0]
-            pred_bbox[:, 0] /= self.img_size[1]
-            pred_bbox[:, 2] /= self.img_size[1]
-            pred_bbox[:, 1] /= self.img_size[0]
-            pred_bbox[:, 3] /= self.img_size[0]
+            obs_bbox_offset = norm_bbox(obs_bbox_offset, self.dataset_name)
+            pred_bbox_offset = norm_bbox(pred_bbox_offset, self.dataset_name)
+            obs_bbox = norm_bbox(obs_bbox, self.dataset_name)
+            pred_bbox = norm_bbox(pred_bbox, self.dataset_name)
 
-        sample = {'dataset_name': torch.tensor(DATASET2ID[self.dataset_name]),
+        sample = {'dataset_name': torch.tensor(DATASET_TO_ID[self.dataset_name]),
                 'set_id_int': torch.tensor(set_id_int),  # obs_len,
                 'vid_id_int': torch.tensor(self.samples['obs_vid_id_int'][idx][-1]),  # int
                 'ped_id_int': torch.tensor(self.samples['obs_ped_id_int'][idx][-1]),  # int out of (set id, vid id, ped id)
@@ -412,21 +400,17 @@ class PIEDataset(Dataset):
                     pred_coords.append(coord[:, :2])  # 17, 2
                 pred_coords = np.stack(pred_coords, axis=0)  # T 17, 2
                 # (T, N, C) -> (C, T, N)
-                try:
-                    obs_skeletons = torch.from_numpy(coords).float().permute(2, 0, 1)  # 2, T, 17
-                    pred_skeletons = torch.from_numpy(pred_coords).float().permute(2, 0, 1)
-                    # add offset
-                    obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
-                    pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
-                    if '0-1' in self.sklt_format:
-                        obs_skeletons[0] = obs_skeletons[0] / self.img_size[0]
-                        obs_skeletons[1] = obs_skeletons[1] / self.img_size[1]
-                        pred_skeletons[0] = pred_skeletons[0] / self.img_size[0]
-                        pred_skeletons[1] = pred_skeletons[1] / self.img_size[1]
-                except:
-                    print('coords shape',coords.shape)
-                    import pdb;pdb.set_trace()
-                    raise NotImplementedError()
+                obs_skeletons = torch.from_numpy(coords).float().permute(2, 0, 1)  # 2, T, 17
+                pred_skeletons = torch.from_numpy(pred_coords).float().permute(2, 0, 1)
+                # yx -> xy
+                obs_skeletons = obs_skeletons.flip(0)
+                pred_skeletons = pred_skeletons.flip(0)
+                # add offset
+                obs_skeletons = sklt_local_to_global(obs_skeletons.float(), obs_bbox_ori.float())
+                pred_skeletons = sklt_local_to_global(pred_skeletons.float(), pred_bbox_ori.float())
+                if '0-1' in self.sklt_format:
+                    obs_skeletons = norm_sklt(obs_skeletons, self.dataset_name)
+                    pred_skeletons = norm_sklt(pred_skeletons, self.dataset_name)
             elif self.sklt_format == 'heatmap':
                 pid = self.samples['obs_pid'][idx][0][0]
                 heatmaps = []
@@ -567,7 +551,7 @@ class PIEDataset(Dataset):
         if 'ctx' in self.modalities:
             # print('-----------getting ctx-----------')
             if self.ctx_format in ('mask_ped', 'local', 'ori_local', 'ori', 
-                 'ped_graph'):
+                 'ped_graph', 'ped_graph_seg'):
                 pid = self.samples['obs_pid'][idx][0][0]
                 setid, vidid, oid = pid.split('_')
                 ctx_imgs = []
@@ -586,7 +570,7 @@ class PIEDataset(Dataset):
                 if self.target_color_order == 'RGB':
                    ctx_imgs = torch.flip(ctx_imgs, dims=[0])
                 # load cropped seg
-                if self.ctx_format == 'ped_graph':
+                if self.ctx_format in ('ped_graph', 'ped_graph_seg'):
                     if self.dataset_name == 'PIE':
                         vid_dir = '/'.join([setid, vidid])
                     else:
@@ -607,7 +591,7 @@ class PIEDataset(Dataset):
                         all_c_seg.append(torch.from_numpy(segmap))
                     all_c_seg = torch.stack(all_c_seg, dim=-1)  # h w n_cls
                     all_c_seg = torch.argmax(all_c_seg, dim=-1, keepdim=True).permute(2, 0, 1)  # 1 h w
-                    ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0)  # 4 h w
+                    ctx_imgs = torch.concat([ctx_imgs[:, -1], all_c_seg], dim=0).unsqueeze(1)  # 4 1 h w
                 sample['obs_context'] = ctx_imgs  # shape [3, obs_len, H, W]
             elif self.ctx_format in \
                 ('seg_ori_local', 'seg_local'):

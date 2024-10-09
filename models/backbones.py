@@ -3,6 +3,7 @@ from turtle import forward
 from numpy.lib.function_base import copy
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 from thop import profile
 # from torchviz import make_dot
@@ -10,7 +11,7 @@ from torchsummary import summary
 import os
 
 from copy import deepcopy
-
+from .R2D import resnet50, resnet18, resnet18_new
 from .R3D import generate_model
 from .I3D import I3D_backbone
 from .VGG import vgg16_backbone
@@ -49,6 +50,12 @@ LAST_DIM = {
     'deeplabv3_resnet50': 2048,
     'deeplabv3_resnet101': 2048,
     'transformerencoder1D': 64,
+    'pedgraphconv': 64,
+    'pedgraphconv_seg': 64,
+    'pedgraphR2D50': 2048,
+    'pedgraphR2D18': 512,
+    'pedgraphR2D18_new': 512,
+    'pedgraphflat': 4608,
 }
 
 BACKBONE_TO_OUTDIM = {
@@ -864,7 +871,166 @@ class CustomTransformerEncoder1D(nn.Module):
         return x
     
 
-def create_backbone(backbone_name, modality=None, lstm_h_dim=128, lstm_input_dim=4, last_dim=487):
+class PedGraphConv(nn.Module):
+    def __init__(self, 
+                 seg_only=False, 
+                 n_seg=4,
+                 *args, 
+                 **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.ch1, self.ch2 = 32, 64
+        self.seg_only = seg_only
+        self.n_seg = n_seg
+        i_ch = 3+self.n_seg if not seg_only else self.n_seg
+        self.ctx_encoder0 = nn.Sequential(
+            nn.Conv2d(i_ch, self.ch1, kernel_size=3, stride=1, padding=0, bias=False), 
+            nn.BatchNorm2d(self.ch1), 
+            nn.SiLU(),
+            nn.Conv2d(self.ch1, self.ch1, kernel_size=3, stride=1, padding=0, bias=False), 
+            nn.BatchNorm2d(self.ch1), 
+            nn.SiLU(),
+            nn.Conv2d(self.ch1, self.ch2, kernel_size=3, stride=1, padding=0, bias=False), 
+            nn.BatchNorm2d(self.ch2), 
+            nn.SiLU()
+            )
+    
+    def forward(self, x):
+        '''
+        x:  (T) B 4 H W
+        '''
+        # get the last frame
+        if len(x.size()) == 5:  # B 4 T H W
+            x = x[:,:,-1]  # B 4 T H W -> B 4 H W
+        one_hot = F.one_hot(x[:, -1].long(), num_classes=self.n_seg).float() # B H W -> B H W n_seg
+        one_hot = one_hot.permute(0, 3, 1, 2)  # B n_seg H W
+        if self.seg_only:
+            x = one_hot
+        else:
+            x = torch.cat([x[:,:3], one_hot], dim=1) # B 3+n_seg H W
+        x = self.ctx_encoder0(x) # b 64 h w
+        return x
+
+class PedGraphFlat(nn.Module):
+    def __init__(self, 
+                 seg_only=False, 
+                 n_seg=4,
+                 *args, 
+                 **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.ch1, self.ch2 = 32, 64
+        self.seg_only = seg_only
+        self.n_seg = n_seg
+        i_ch = 3+self.n_seg if not seg_only else self.n_seg
+        self.ctx_encoder0 = nn.Sequential(
+            nn.Conv2d(i_ch, self.ch1, kernel_size=3, stride=1, padding=0, bias=False), 
+            nn.BatchNorm2d(self.ch1), 
+            nn.SiLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=0),
+            nn.Conv2d(self.ch1, self.ch1, kernel_size=3, stride=1, padding=0, bias=False), 
+            nn.BatchNorm2d(self.ch1), 
+            nn.SiLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=0),
+            nn.Conv2d(self.ch1, self.ch2, kernel_size=3, stride=1, padding=0, bias=False), 
+            nn.BatchNorm2d(self.ch2), 
+            nn.SiLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=0),
+            nn.Conv2d(self.ch2, self.ch1, kernel_size=1, stride=1, padding=0, bias=False), 
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=0),
+            )
+    
+    def forward(self, x):
+        '''
+        x:  (T) B 4 H W
+        '''
+        # get the last frame
+        if len(x.size()) == 5:  # B 4 T H W
+            x = x[:,:,-1]  # B 4 T H W -> B 4 H W
+        one_hot = F.one_hot(x[:, -1].long(), num_classes=self.n_seg).float() # B H W -> B H W n_seg
+        one_hot = one_hot.permute(0, 3, 1, 2)  # B n_seg H W
+        if self.seg_only:
+            x = one_hot
+        else:
+            x = torch.cat([x[:,:3], one_hot], dim=1) # B 3+n_seg H W
+        x = self.ctx_encoder0(x) # b 64 h w
+        return x
+
+class PedGraphR2D(nn.Module):
+    def __init__(self, 
+                 seg_only=False, 
+                 n_seg=4,
+                 pretrained=False,
+                 n_layers=50,
+                 *args, 
+                 **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.seg_only = seg_only
+        self.n_seg = n_seg
+        i_ch = 3+self.n_seg if not seg_only else self.n_seg
+        self.conv0 = nn.Conv2d(i_ch, 3, kernel_size=1, stride=1, padding=0, bias=False)
+        if n_layers == 50:
+            self.backbone = resnet50(pretrained=pretrained)
+        elif n_layers == 18:
+            self.backbone = resnet18(pretrained=pretrained)
+
+    def forward(self, x):
+        '''
+        x:  (T) B 4 H W
+        '''
+        # get the last frame
+        if len(x.size()) == 5:  # B 4 T H W
+            x = x[:,:,-1]  # B 4 T H W -> B 4 H W
+        one_hot = F.one_hot(x[:, -1].long(), num_classes=self.n_seg).float() # B H W -> B H W n_seg
+        one_hot = one_hot.permute(0, 3, 1, 2)  # B n_seg H W
+        if self.seg_only:
+            x = one_hot
+        else:
+            x = torch.cat([x[:,:3], one_hot], dim=1) # B 3+n_seg H W
+        x = self.conv0(x)
+        x = self.backbone(x) # b 64 h w
+        return x
+
+class PedGraphR2D_new(nn.Module):
+    def __init__(self, 
+                 seg_only=False, 
+                 n_seg=4,
+                 pretrained=False,
+                 n_layers=50,
+                 *args, 
+                 **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.seg_only = seg_only
+        self.n_seg = n_seg
+        i_ch = 3+self.n_seg if not seg_only else self.n_seg
+        self.conv0 = nn.Conv2d(i_ch, 3, kernel_size=1, stride=1, padding=0, bias=False)
+        if n_layers == 50:
+            self.backbone = resnet50(pretrained=pretrained)
+        elif n_layers == 18:
+            self.backbone = resnet18_new(pretrained=pretrained)
+
+    def forward(self, x):
+        '''
+        x:  (T) B 4 H W
+        '''
+        # get the last frame
+        if len(x.size()) == 5:  # B 4 T H W
+            x = x[:,:,-1]  # B 4 T H W -> B 4 H W
+        one_hot = F.one_hot(x[:, -1].long(), num_classes=self.n_seg).float() # B H W -> B H W n_seg
+        one_hot = one_hot.permute(0, 3, 1, 2)  # B n_seg H W
+        if self.seg_only:
+            x = one_hot
+        else:
+            x = torch.cat([x[:,:3], one_hot], dim=1) # B 3+n_seg H W
+        x = self.conv0(x)
+        x = self.backbone(x) # b 64 h w
+        return x
+
+def create_backbone(backbone_name, 
+                    modality=None, 
+                    lstm_h_dim=128, 
+                    lstm_input_dim=4, 
+                    last_dim=487,
+                    args=None,
+                    **kwargs):
     if backbone_name == 'C3D_new':  # 3, 16, 224, 224 -> 512, 1, 8, 8
         backbone = C3D_backbone(pretrained=True, t_downsample='new')
     elif backbone_name == 'C3D':
@@ -978,6 +1144,30 @@ def create_backbone(backbone_name, modality=None, lstm_h_dim=128, lstm_input_dim
         elif modality == 'ego':
             in_dim = 1
         backbone = CustomTransformerEncoder1D(in_dim=in_dim)
+    elif backbone_name == 'pedgraphconv':
+        backbone = PedGraphConv(seg_only=False,
+                                n_seg=len(args.seg_cls.split(',')))
+    elif backbone_name == 'pedgraphconv_seg':
+        backbone = PedGraphConv(seg_only=True,
+                                n_seg=len(args.seg_cls.split(',')))
+    elif backbone_name == 'pedgraphR2D50':
+        backbone = PedGraphR2D(seg_only=False,
+                                 n_seg=len(args.seg_cls.split(',')),
+                                 n_layers=50,
+                                 pretrained=False)
+    elif backbone_name == 'pedgraphR2D18':
+        backbone = PedGraphR2D(seg_only=False,
+                                 n_seg=len(args.seg_cls.split(',')),
+                                 n_layers=18,
+                                 pretrained=False)
+    elif backbone_name == 'pedgraphR2D18_new':
+        backbone = PedGraphR2D_new(seg_only=False,
+                                 n_seg=len(args.seg_cls.split(',')),
+                                 n_layers=18,
+                                 pretrained=False)
+    elif backbone_name == 'pedgraphflat':
+        backbone = PedGraphFlat(seg_only=False,
+                                n_seg=len(args.seg_cls.split(',')))
     else:
         raise ValueError(backbone_name)
     return backbone
@@ -1073,42 +1263,20 @@ def record_t_conv3d_info(conv_info):
 if __name__ == "__main__":
     inputs = torch.ones(1, 3, 16, 224, 224)  # B, C, T, H, W
     # net = C3D_backbone(pretrained=True)
-    net = create_backbone('R3D50')
-    print(net)
+    # net = create_backbone('R3D50')
     # print(net)
-    # for m in net.modules():
-    #     print(m)
-    # for name, para in net.named_parameters():
-    #     print(name, ':')
+    # # print(net)
+    # # for m in net.modules():
+    # #     print(m)
+    # # for name, para in net.named_parameters():
+    # #     print(name, ':')
 
-    summary(net, input_size=[(3, 16, 224, 224)], batch_size=1, device="cpu")
-    # flops, paras = profile(model=net, inputs=(inputs,))
-    # print('flops:', flops)
-    # print('params:', paras)
-    # import pdb; pdb.set_trace()
+    # summary(net, input_size=[(3, 16, 224, 224)], batch_size=1, device="cpu")
 
+    # outputs = net.forward(inputs)
+    # print(outputs.size())
+    inputs = torch.rand(1, 7, 224, 224)
+    net = PedGraphFlat(seg_only=False, n_seg=4)
     outputs = net.forward(inputs)
     print(outputs.size())
-    # vise = make_dot(outputs, params=dict(net.named_parameters()))
-    # vise.render(filename='wrong_forw', view=False, format='pdf')
-    
-    # conv_info = record_conv3d_info(net)
-    # sp_k_list, sp_s_list, sp_p_list = record_sp_conv3d_info_w(conv_info)
-    # t_k_list, t_s_list, t_p_list = record_t_conv3d_info(conv_info)
-    # from receptive_field import compute_proto_layer_rf_info_v2
-    # sp_proto_layer_rf_info = compute_proto_layer_rf_info_v2(input_size=224,
-    #                                                      layer_filter_sizes=sp_k_list,
-    #                                                      layer_strides=sp_s_list,
-    #                                                      layer_paddings=sp_p_list,
-    #                                                      prototype_kernel_size=1)
-    # t_proto_layer_rf_info = compute_proto_layer_rf_info_v2(input_size=16,
-    #                                                      layer_filter_sizes=t_k_list,
-    #                                                      layer_strides=t_s_list,
-    #                                                      layer_paddings=t_p_list,
-    #                                                      prototype_kernel_size=1)
-    # print(sp_k_list, sp_s_list, sp_p_list)
-    # print(sp_proto_layer_rf_info)
-    # print(t_proto_layer_rf_info)
-
-    
-    # import pdb;pdb.set_trace()
+    import pdb;pdb.set_trace()
