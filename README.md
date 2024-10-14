@@ -2,7 +2,7 @@
 <img src="https://github.com/Equinoxxxxx/SPN/blob/main/fig2.png">
 
 ## Visualized prototypes
-
+https://github.com/Equinoxxxxx/SPN/tree/main/visualized_prototypes 
 
 ## Customize the directories
 Change the directories for datasets (```dataset_root```) and weight files (```ckpt_root```) in config.py.
