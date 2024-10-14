@@ -1,5 +1,8 @@
 # Pytorch implementation of "Sparse Prototype Network for Explainable Pedestrian Behavior Prediction"
-<img src="https://github.com/Equinoxxxxx/SPN/blob/main/fig2.pdf">
+<img src="https://github.com/Equinoxxxxx/SPN/blob/main/fig2.png">
+
+## Visualized prototypes
+
 
 ## Customize the directories
 Change the directories for datasets (```dataset_root```) and weight files (```ckpt_root```) in config.py.
@@ -64,5 +67,3 @@ python -m tools.data.preprocess
 ```
 python main.py --test_every 1 --explain_every 10
 ```
-
-## Visualization of prototypes
