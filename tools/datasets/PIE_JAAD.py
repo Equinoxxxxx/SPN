@@ -51,6 +51,7 @@ class PIEDataset(Dataset):
                  ctx_format='ori_local', 
                  traj_format='ltrb', 
                  ego_format='accel',
+                 social_format='rel_loc',
                  pred_img=0,
                  pred_context=0, pred_context_mode='ori',
                  small_set=0,
@@ -93,6 +94,7 @@ class PIEDataset(Dataset):
         self.ctx_size = ctx_size
         self.traj_format = traj_format
         self.ego_format = ego_format
+        self.social_format = social_format
         # self.seg_class_idx = [11, 13, 6, 7]  # person, car, light, sign
         self.pred_img = pred_img
         self.pred_context = pred_context
@@ -373,7 +375,11 @@ class PIEDataset(Dataset):
                                 copy.deepcopy(self.samples['obs_neighbor_oid'][idx])
                                 ],
                                 self.max_n_neighbor)
-            sample['obs_neighbor_relation'] = torch.tensor(relations).float()
+            if self.social_format == 'rel_loc':
+                sample['obs_neighbor_relation'] = torch.tensor(relations).float()  # K T 5
+            elif self.social_format == 'ori_traj':
+                sample['obs_neighbor_relation'] =\
+                      torch.cat([obs_bbox_ori.unsqueeze(0), torch.tensor(neighbor_bbox).float()], 0) # K+1 T 4
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
             sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float()
         if 'sklt' in self.modalities:

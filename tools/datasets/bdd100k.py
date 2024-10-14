@@ -67,6 +67,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
                  sklt_format='pseudo_heatmap',
                  traj_format='ltrb',
                  ego_format='accel',
+                 social_format='rel_loc',
                  augment_mode='random_hflip',
                  seg_cls=['person', 'vehicle', 'road', 'traffic_light'],
                  rm_occl=False,
@@ -107,6 +108,7 @@ class BDD100kDataset(torch.utils.data.Dataset):
         self.sklt_format = sklt_format
         self.traj_format = traj_format
         self.ego_format = ego_format
+        self.social_format = social_format
         self.small_set = small_set
         self.augment_mode = augment_mode
         self.seg_cls = seg_cls
@@ -242,7 +244,11 @@ class BDD100kDataset(torch.utils.data.Dataset):
                                 copy.deepcopy(self.samples['obs']['neighbor_oid'][idx])
                                 ],
                                 self.max_n_neighbor)
-            sample['obs_neighbor_relation'] = torch.tensor(relations).float()
+            if self.social_format == 'rel_loc':
+                sample['obs_neighbor_relation'] = torch.tensor(relations).float()  # K T 5
+            elif self.social_format == 'ori_traj':
+                sample['obs_neighbor_relation'] =\
+                      torch.cat([obs_bbox_ori.unsqueeze(0), torch.tensor(neighbor_bbox).float()], 0) # K+1 T 4
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
             sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float()
         if 'img' in self.modalities:

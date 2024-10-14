@@ -1140,7 +1140,10 @@ def create_backbone(backbone_name,
         elif modality == 'sklt':
             in_dim = 2
         elif modality == 'social':
-            in_dim = 5
+            if args.social_format == 'ori_traj':
+                in_dim = 4
+            elif args.social_format == 'rel_loc':
+                in_dim = 5
         elif modality == 'ego':
             in_dim = 1
         backbone = CustomTransformerEncoder1D(in_dim=in_dim)

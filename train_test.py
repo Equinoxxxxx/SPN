@@ -348,7 +348,7 @@ def train_test_epoch(args,
     # all sparsity
     if args.model_name == 'pedspace':
         all_proto_simi = torch.cat(all_proto_simi, dim=0)  # n_samples(*M) P
-        all_sparsity, all_topk_indices = calc_topk_monosem(proto_simi, 
+        all_sparsity, all_topk_indices = calc_topk_monosem(all_proto_simi, 
                                                         args.topk,
                                                         args.topk_metric)
         model.module.all_sparsity = all_sparsity # P,

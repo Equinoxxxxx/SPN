@@ -114,6 +114,7 @@ def get_args():
     parser.add_argument('--ctx_backbone_name', type=str, default='deeplabv3_resnet50')
     # social setting
     parser.add_argument('--social_backbone_name', type=str, default='transformerencoder1D')
+    parser.add_argument('--social_format', type=str, default='rel_loc')
     # traj setting
     parser.add_argument('--traj_format', type=str, default='0-1ltrb')
     parser.add_argument('--traj_backbone_name', type=str, default='transformerencoder1D')

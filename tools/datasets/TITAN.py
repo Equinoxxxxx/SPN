@@ -256,6 +256,7 @@ class TITAN_dataset(Dataset):
                  sklt_format='coord',
                  traj_format='ltrb',
                  ego_format='accel',
+                 social_format='rel_loc',
                  augment_mode='random_hflip',
                  seg_cls=['person', 'vehicle', 'road', 'traffic_light'],
                  max_n_neighbor=10,
@@ -291,6 +292,7 @@ class TITAN_dataset(Dataset):
         self.sklt_format = sklt_format
         self.traj_format = traj_format
         self.ego_format = ego_format
+        self.social_format = social_format
         self.track_save_path = track_save_path
         self.required_labels = required_labels
         self.multi_label_cross = multi_label_cross
@@ -573,7 +575,7 @@ class TITAN_dataset(Dataset):
 
     def __getitem__(self, idx):
         obs_bbox_offset = copy.deepcopy(torch.tensor(self.samples['obs']['bbox_normed'][idx]).float())  # T 4
-        obs_bbox = copy.deepcopy(torch.tensor(self.samples['obs']['bbox'][idx]).float())
+        obs_bbox = copy.deepcopy(torch.tensor(self.samples['obs']['bbox'][idx]).float())  # T 4
         pred_bbox_offset = copy.deepcopy(torch.tensor(self.samples['pred']['bbox_normed'][idx]).float())
         pred_bbox = copy.deepcopy(torch.tensor(self.samples['pred']['bbox'][idx]).float())
         obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float()[:, 0:1]  # [accel, ang_vel] 0 for accel only
@@ -584,7 +586,7 @@ class TITAN_dataset(Dataset):
 
         obs_bbox[:,2] = torch.clamp(obs_bbox[:,2], min=0, max=self.img_size[1]) # r
         obs_bbox[:,3] = torch.clamp(obs_bbox[:,3], min=0, max=self.img_size[0]) # b
-        obs_bbox_ori = copy.deepcopy(obs_bbox)
+        obs_bbox_ori = copy.deepcopy(obs_bbox)  # T 4
         pred_bbox_ori = copy.deepcopy(pred_bbox)
         # squeeze the coords
         if '0-1' in self.traj_format:
@@ -649,7 +651,11 @@ class TITAN_dataset(Dataset):
                                 copy.deepcopy(np.array(self.samples['obs']['neighbor_bbox'][idx]).transpose(1,0,2)),
                                 copy.deepcopy(self.samples['obs']['neighbor_oid'][idx])],
                                 self.max_n_neighbor)
-            sample['obs_neighbor_relation'] = torch.tensor(relations).float()  # K T 5
+            if self.social_format == 'rel_loc':
+                sample['obs_neighbor_relation'] = torch.tensor(relations).float()  # K T 5
+            elif self.social_format == 'ori_traj':
+                sample['obs_neighbor_relation'] =\
+                      torch.cat([obs_bbox_ori.unsqueeze(0), torch.tensor(neighbor_bbox).float()], 0) # K+1 T 4
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float() # K T 4
             sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float() # K
             # print(f'neighbor_bbox: {sample["obs_neighbor_bbox"]}')

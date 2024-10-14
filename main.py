@@ -105,6 +105,7 @@ def construct_data_loader(args, log=print):
                                             ctx_format=args.ctx_format,
                                             traj_format=args.traj_format,
                                             ego_format=args.ego_format,
+                                            social_format=args.social_format,
                                             augment_mode=args.augment_mode,
                                             max_n_neighbor=args.max_n_neighbor,
                                             )
@@ -127,6 +128,7 @@ def construct_data_loader(args, log=print):
                                         ctx_format=args.ctx_format,
                                         traj_format=args.traj_format,
                                         ego_format=args.ego_format,
+                                        social_format=args.social_format,
                                         small_set=_small_set,
                                         tte=args.tte,
                                         recog_act=False,
@@ -152,6 +154,7 @@ def construct_data_loader(args, log=print):
                                         ctx_format=args.ctx_format,
                                         traj_format=args.traj_format,
                                         ego_format=args.ego_format,
+                                        social_format=args.social_format,
                                             max_n_neighbor=args.max_n_neighbor,
                                         )
                 if name == 'bdd100k':
@@ -170,6 +173,7 @@ def construct_data_loader(args, log=print):
                                             ctx_format=args.ctx_format,
                                             traj_format=args.traj_format,
                                             ego_format=args.ego_format,
+                                            social_format=args.social_format,
                                             augment_mode=args.augment_mode,
                                             max_n_neighbor=args.max_n_neighbor,
                                             )
@@ -591,6 +595,8 @@ def main(rank, world_size, args):
     best_epoch_all_test_res.append({d:None for d in args.test_dataset_names[1]})
     cur_epoch_all_test_res = [{d:None for d in args.test_dataset_names[0]}]
     cur_epoch_all_test_res.append({d:None for d in args.test_dataset_names[1]})
+    best_epoch_train_res = [{}, {}]
+    cur_epoch_train_res = [{}, {}]
     best_e = 0
     # stage 1
     log('----------------------------STAGE 1----------------------------')
@@ -608,6 +614,7 @@ def main(rank, world_size, args):
                                     modalities=args.modalities,
                                     loss_params=loss_params[0],
                                     )
+        cur_epoch_train_res[0] = train_res
         # add results to curve
         update_res_curve(train_res, curve_dict, 'concat', 'train', train_test_plot_dir)
         # validation and test
@@ -653,6 +660,7 @@ def main(rank, world_size, args):
                 log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res[args.key_metric]}')
                 if cur_key_res < best_val_res[args.key_metric]:
                     try:
+                        best_epoch_train_res[0] = cur_epoch_train_res[0]
                         best_epoch_all_test_res[0] = cur_epoch_all_test_res[0]
                         update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
                     except:
@@ -667,6 +675,7 @@ def main(rank, world_size, args):
                     import pdb;pdb.set_trace()
                 if cur_key_res > best_val_res['cls'][args.key_act_set][args.key_metric]:
                     try:
+                        best_epoch_train_res[0] = cur_epoch_train_res[0]
                         best_epoch_all_test_res[0] = cur_epoch_all_test_res[0]
                         update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
                     except:
@@ -679,6 +688,8 @@ def main(rank, world_size, args):
             log(f'bset epoch: {best_e}')
             log(f'current best val results: {best_val_res}')
             log(f'current best test results: {best_test_res}')
+            if args.model_name == 'pedspace':
+                log(f'train sparsity best epoch: {best_epoch_train_res[0]["all_sparsity"]}')
             log(f'all results of best epoch: {best_epoch_all_test_res[0]}')
         if e%args.explain_every == 0 and args.model_name == 'pedspace':
             log('Selecting topk samples')
@@ -730,6 +741,7 @@ def main(rank, world_size, args):
                                     modalities=args.modalities,
                                     loss_params=loss_params[1],
                                     )
+        cur_epoch_train_res[1] = train_res
         # add results to curve
         update_res_curve(train_res, curve_dict, 'concat', 'train', train_test_plot_dir)
         # validation and test
@@ -774,6 +786,7 @@ def main(rank, world_size, args):
                     / len(args.test_dataset_names[1])
                 log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res[args.key_metric]}')
                 if cur_key_res < best_val_res[args.key_metric]:
+                    best_epoch_train_res[1] = cur_epoch_train_res[1]
                     best_epoch_all_test_res[1] = cur_epoch_all_test_res[1]
                     update_best_res(best_val_res, 
                                     best_test_res, 
@@ -785,6 +798,7 @@ def main(rank, world_size, args):
                     / len(args.test_dataset_names[1])
                 log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res["cls"][args.key_act_set][args.key_metric]}')
                 if cur_key_res > best_val_res['cls'][args.key_act_set][args.key_metric]:
+                    best_epoch_train_res[1] = cur_epoch_train_res[1]
                     best_epoch_all_test_res[1] = cur_epoch_all_test_res[1]
                     update_best_res(best_val_res, 
                                     best_test_res, 
@@ -798,6 +812,8 @@ def main(rank, world_size, args):
             log(f'bset epoch: {best_e}')
             log(f'current best val results: {best_val_res}')
             log(f'current best test results: {best_test_res}')
+            if args.model_name == 'pedspace':
+                log(f'train sparsity best epoch: {best_epoch_train_res[1]["all_sparsity"]}')
             log(f'all results of best epoch: {best_epoch_all_test_res[1]}')
         # explain
         if e%args.explain_every == 0 and args.model_name == 'pedspace':

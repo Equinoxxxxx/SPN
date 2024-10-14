@@ -51,6 +51,7 @@ class NuscDataset(torch.utils.data.Dataset):
                  ctx_format='ped_graph',
                  traj_format='ltrb',
                  ego_format='accel',
+                 social_format='rel_loc',
                  seg_cls=['person', 'vehicle', 'road', 'traffic_light'],
                  max_n_neighbor=10,
                  min_wh=(72,36),
@@ -89,6 +90,7 @@ class NuscDataset(torch.utils.data.Dataset):
         self.ctx_format = ctx_format
         self.traj_format = traj_format
         self.ego_format = ego_format
+        self.social_format = social_format
         self.seg_cls = seg_cls
         self.max_n_neighbor = max_n_neighbor
         # self.ego_motion_key = 'ego_accel' if 'accel' in self.ego_format else 'ego_speed'
@@ -223,7 +225,11 @@ class NuscDataset(torch.utils.data.Dataset):
                                 copy.deepcopy(self.samples['obs']['neighbor_oid'][idx])
                                 ],
                                 self.max_n_neighbor)
-            sample['obs_neighbor_relation'] = torch.tensor(relations).float()
+            if self.social_format == 'rel_loc':
+                sample['obs_neighbor_relation'] = torch.tensor(relations).float()  # K T 5
+            elif self.social_format == 'ori_traj':
+                sample['obs_neighbor_relation'] =\
+                      torch.cat([obs_bbox_ori.unsqueeze(0), torch.tensor(neighbor_bbox).float()], 0) # K+1 T 4
             sample['obs_neighbor_bbox'] = torch.tensor(neighbor_bbox).float()
             sample['obs_neighbor_oid'] = torch.tensor(neighbor_oid).float()
         if 'img' in self.modalities:
