@@ -42,7 +42,7 @@ def explain_spec_ckpt():
     ckpt_epoch = int(explain_args.ckpt_path.split('/')[-1].split('_')[0])
     exp_dir = explain_args.args_path.replace('args.pkl', '')
     if explain_args.do_explain:
-        explain_root = os.path.join(exp_dir, f'explain_epoch_{ckpt_epoch}' )
+        explain_root = os.path.join(exp_dir, f'explain_epoch_{ckpt_epoch}')
     else:
         explain_root = os.path.join(exp_dir, f'test_epoch_{ckpt_epoch}' )
     makedir(explain_root)
@@ -165,6 +165,7 @@ def explain_spec_ckpt():
             customize_proto_res[cur_dataset] = test_res
         log(f'Customize proto results\n  {customize_proto_res}')
     logclose()
+
 
 if __name__ == '__main__':
     explain_spec_ckpt()

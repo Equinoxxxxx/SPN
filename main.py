@@ -591,13 +591,18 @@ def main(rank, world_size, args):
                                     'f1':0,
                                     'map':0,}
     best_test_res = copy.deepcopy(best_val_res)
-    best_epoch_all_test_res = [{d:None for d in args.test_dataset_names[0]}]
-    best_epoch_all_test_res.append({d:None for d in args.test_dataset_names[1]})
+    best_epoch_all_test_res = [None, None]
     cur_epoch_all_test_res = [{d:None for d in args.test_dataset_names[0]}]
     cur_epoch_all_test_res.append({d:None for d in args.test_dataset_names[1]})
     best_epoch_train_res = [{}, {}]
     cur_epoch_train_res = [{}, {}]
     best_e = 0
+    best_train_sparsity = 0
+    best_train_sparse_e = 0
+    best_train_sparse_e_res = [None, None]
+    best_val_sparsity = 0
+    best_val_sparse_e = 0
+    best_val_sparse_e_res = [None, None]
     # stage 1
     log('----------------------------STAGE 1----------------------------')
     for e in range(1, 1+args.epochs1):
@@ -659,30 +664,22 @@ def main(rank, world_size, args):
                     / len(args.test_dataset_names[0])
                 log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res[args.key_metric]}')
                 if cur_key_res < best_val_res[args.key_metric]:
-                    try:
-                        best_epoch_train_res[0] = cur_epoch_train_res[0]
-                        best_epoch_all_test_res[0] = cur_epoch_all_test_res[0]
-                        update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
-                    except:
-                        import pdb;pdb.set_trace()
+                    best_epoch_train_res[0] = cur_epoch_train_res[0]
+                    best_epoch_all_test_res[0] = cur_epoch_all_test_res[0]
+                    update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
                     best_e = e
             elif args.key_metric in ('f1', 'acc', 'auc', 'map') and args.cls_eff[0] > 0:
-                try:
-                    cur_key_res = sum([curve_dict[d]['val']['cls'][args.key_act_set][args.key_metric][-1] for d in args.test_dataset_names[0]]) \
-                    / len(args.test_dataset_names[0])
-                    log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res["cls"][args.key_act_set][args.key_metric]}')
-                except:
-                    import pdb;pdb.set_trace()
+                cur_key_res = sum([curve_dict[d]['val']['cls'][args.key_act_set][args.key_metric][-1] for d in args.test_dataset_names[0]]) \
+                / len(args.test_dataset_names[0])
+                log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res["cls"][args.key_act_set][args.key_metric]}')
                 if cur_key_res > best_val_res['cls'][args.key_act_set][args.key_metric]:
-                    try:
-                        best_epoch_train_res[0] = cur_epoch_train_res[0]
-                        best_epoch_all_test_res[0] = cur_epoch_all_test_res[0]
-                        update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
-                    except:
-                        import pdb;pdb.set_trace()
+                    best_epoch_train_res[0] = cur_epoch_train_res[0]
+                    best_epoch_all_test_res[0] = cur_epoch_all_test_res[0]
+                    update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
                     best_e = e
             if local_rank == 0 or not ddp:
-                model_path = save_model(model=model, model_dir=ckpt_dir, 
+                model_path = save_model(model=model, 
+                                        model_dir=ckpt_dir, 
                                         model_name=str(e) + '_',
                                         log=log)
             log(f'bset epoch: {best_e}')
@@ -691,6 +688,21 @@ def main(rank, world_size, args):
             if args.model_name == 'pedspace':
                 log(f'train sparsity best epoch: {best_epoch_train_res[0]["all_sparsity"]}')
             log(f'all results of best epoch: {best_epoch_all_test_res[0]}')
+            # update best sparsity
+            val_sparsity = sum([curve_dict[d]['val']['all_sparsity'][-1] for d in args.test_dataset_names[0]]) \
+                / len(args.test_dataset_names[0])
+            if args.model_name == 'pedspace' and train_res['all_sparsity'] > best_train_sparse_e:
+                best_train_sparsity = train_res['all_sparsity']
+                best_train_sparse_e = e
+                best_train_sparse_e_res[0] = cur_epoch_all_test_res[0]
+            if args.model_name == 'pedspace' and val_sparsity > best_val_sparsity:
+                best_val_sparsity = val_sparsity
+                best_val_sparse_e = e
+                best_val_sparse_e_res[0] = cur_epoch_all_test_res[0]
+            log(f'bset train sparsity epoch: {best_train_sparse_e}  {best_train_sparsity}')
+            log(f'bset train sparsity e test res: {best_train_sparse_e_res[0]}')
+            log(f'bset val sparsity epoch: {best_val_sparse_e}  {best_val_sparsity}')
+            log(f'bset val sparsity e test res: {best_val_sparse_e_res[0]}')
         if e%args.explain_every == 0 and args.model_name == 'pedspace':
             log('Selecting topk samples')
             save_root = os.path.join(exp_dir, 'explain', 'stage1_e'+str(e))
@@ -711,7 +723,88 @@ def main(rank, world_size, args):
                             modalities=args.modalities,
                             save_root=save_root,
                             log=log)
-                        
+    # explain best
+    if args.model_name == 'pedspace' and args.epochs1 > 0:
+        log('----------------------------Explain best stage 1-----------------------------')
+        best_ckpt_path = os.path.join(ckpt_dir, (str(best_e) + '_' + '{0:.4f}.pth').format(0))
+        model_best = copy.deepcopy(model)
+        state_dict = torch.load(best_ckpt_path, map_location=device)
+        model_best.load_state_dict(state_dict)
+        model_best.to(device)
+        model_best = torch.nn.parallel.DataParallel(model_best)
+        explain_root = os.path.join(exp_dir, f'explain_stage_1_epoch_{best_e}')
+        if args.mm_fusion_mode == 'no_fusion':
+            select_topk_no_fusion(dataloader=train_loaders[0], 
+                                model_parallel=model_best, 
+                                args=args, 
+                                device=device,
+                                modalities=args.modalities,
+                                save_root=explain_root,
+                                log=log)
+        else:
+            select_topk(dataloader=train_loaders[0], 
+                        model_parallel=model_best, 
+                        args=args, 
+                        device=device,
+                        modalities=args.modalities,
+                        save_root=explain_root,
+                        log=log)
+        del model_best
+        if best_train_sparse_e != best_e:
+            log('----------------------------Explain best train sparse stage 1-----------------------------')
+            best_ckpt_path = os.path.join(ckpt_dir, 
+                                          (str(best_train_sparse_e) + '_' + '{0:.4f}.pth').format(0))
+            model_best = copy.deepcopy(model)
+            state_dict = torch.load(best_ckpt_path, map_location=device)
+            model_best.load_state_dict(state_dict)
+            model_best.to(device)
+            model_best = torch.nn.parallel.DataParallel(model_best)
+            explain_root = os.path.join(exp_dir, f'explain_stage_1_epoch_{best_train_sparse_e}')
+            if args.mm_fusion_mode == 'no_fusion':
+                select_topk_no_fusion(dataloader=train_loaders[0], 
+                                    model_parallel=model_best, 
+                                    args=args, 
+                                    device=device,
+                                    modalities=args.modalities,
+                                    save_root=explain_root,
+                                    log=log)
+            else:
+                select_topk(dataloader=train_loaders[0], 
+                            model_parallel=model_best, 
+                            args=args, 
+                            device=device,
+                            modalities=args.modalities,
+                            save_root=explain_root,
+                            log=log)
+            del model_best
+        if best_val_sparse_e != best_e and best_val_sparse_e != best_train_sparse_e:
+            log('----------------------------Explain best val sparse stage 1-----------------------------')
+            best_ckpt_path = os.path.join(ckpt_dir, 
+                                          (str(best_val_sparse_e) + '_' + '{0:.4f}.pth').format(0))
+            model_best = copy.deepcopy(model)
+            state_dict = torch.load(best_ckpt_path, map_location=device)
+            model_best.load_state_dict(state_dict)
+            model_best.to(device)
+            model_best = torch.nn.parallel.DataParallel(model_best)
+            explain_root = os.path.join(exp_dir, f'explain_stage_1_epoch_{best_val_sparse_e}')
+            if args.mm_fusion_mode == 'no_fusion':
+                select_topk_no_fusion(dataloader=train_loaders[0], 
+                                    model_parallel=model_best, 
+                                    args=args, 
+                                    device=device,
+                                    modalities=args.modalities,
+                                    save_root=explain_root,
+                                    log=log)
+            else:
+                select_topk(dataloader=train_loaders[0], 
+                            model_parallel=model_best, 
+                            args=args, 
+                            device=device,
+                            modalities=args.modalities,
+                            save_root=explain_root,
+                            log=log)
+            del model_best
+
     log('----------------------------STAGE 2----------------------------')
     # best res
     best_val_res = {}
@@ -728,6 +821,12 @@ def main(rank, world_size, args):
                                     'map':0,}
     best_test_res = copy.deepcopy(best_val_res)
     best_e = 0
+    best_train_sparsity = 0
+    best_train_sparse_e = 0
+    # best_train_sparse_e_res = [None, None]
+    best_val_sparsity = 0
+    best_val_sparse_e = 0
+    # best_val_sparse_e_res = [None, None]
     for e in range(1, 1+args.epochs2):
         log(f' stage 2 epoch {e}')
         train_res = train_test_epoch(args,
@@ -815,6 +914,21 @@ def main(rank, world_size, args):
             if args.model_name == 'pedspace':
                 log(f'train sparsity best epoch: {best_epoch_train_res[1]["all_sparsity"]}')
             log(f'all results of best epoch: {best_epoch_all_test_res[1]}')
+            # update best sparsity
+            val_sparsity = sum([curve_dict[d]['val']['all_sparsity'][-1] for d in args.test_dataset_names[1]]) \
+                / len(args.test_dataset_names[1])
+            if args.model_name == 'pedspace' and train_res['all_sparsity'] > best_train_sparse_e:
+                best_train_sparsity = train_res['all_sparsity']
+                best_train_sparse_e = e
+                best_train_sparse_e_res[1] = cur_epoch_all_test_res[1]
+            if args.model_name == 'pedspace' and val_sparsity > best_val_sparsity:
+                best_val_sparsity = val_sparsity
+                best_val_sparse_e = e
+                best_val_sparse_e_res[1] = cur_epoch_all_test_res[1]
+            log(f'bset train sparsity epoch: {best_train_sparse_e}  {best_train_sparsity}')
+            log(f'bset train sparsity e test res: {best_train_sparse_e_res[1]}')
+            log(f'bset val sparsity epoch: {best_val_sparse_e}  {best_val_sparsity}')
+            log(f'bset val sparsity e test res: {best_val_sparse_e_res[1]}')
         # explain
         if e%args.explain_every == 0 and args.model_name == 'pedspace':
             save_root = os.path.join(exp_dir, 'explain', 'stage2_e'+str(e))
@@ -835,6 +949,88 @@ def main(rank, world_size, args):
                             modalities=args.modalities,
                             save_root=save_root,
                             log=log)
+    # explain best
+    if args.model_name == 'pedspace' and args.epochs2 > 0:
+        log('----------------------------Explain best stage 2-----------------------------')
+        best_ckpt_path = os.path.join(ckpt_dir, (str(best_e) + '_' + '{0:.4f}.pth').format(0))
+        model_best = copy.deepcopy(model)
+        state_dict = torch.load(best_ckpt_path, map_location=device)
+        model_best.load_state_dict(state_dict)
+        model_best.to(device)
+        model_best = torch.nn.parallel.DataParallel(model_best)
+        explain_root = os.path.join(exp_dir, f'explain_stage_2_epoch_{best_e}')
+        if args.mm_fusion_mode == 'no_fusion':
+            select_topk_no_fusion(dataloader=train_loaders[1], 
+                                model_parallel=model_best, 
+                                args=args, 
+                                device=device,
+                                modalities=args.modalities,
+                                save_root=explain_root,
+                                log=log)
+        else:
+            select_topk(dataloader=train_loaders[1], 
+                        model_parallel=model_best, 
+                        args=args, 
+                        device=device,
+                        modalities=args.modalities,
+                        save_root=explain_root,
+                        log=log)
+        del model_best
+        if best_train_sparse_e != best_e:
+            log('----------------------------Explain best train sparse stage 2-----------------------------')
+            best_ckpt_path = os.path.join(ckpt_dir, 
+                                          (str(best_train_sparse_e) + '_' + '{0:.4f}.pth').format(0))
+            model_best = copy.deepcopy(model)
+            state_dict = torch.load(best_ckpt_path, map_location=device)
+            model_best.load_state_dict(state_dict)
+            model_best.to(device)
+            model_best = torch.nn.parallel.DataParallel(model_best)
+            explain_root = os.path.join(exp_dir, f'explain_stage_2_epoch_{best_train_sparse_e}')
+            if args.mm_fusion_mode == 'no_fusion':
+                select_topk_no_fusion(dataloader=train_loaders[1], 
+                                    model_parallel=model_best, 
+                                    args=args, 
+                                    device=device,
+                                    modalities=args.modalities,
+                                    save_root=explain_root,
+                                    log=log)
+            else:
+                select_topk(dataloader=train_loaders[1], 
+                            model_parallel=model_best, 
+                            args=args, 
+                            device=device,
+                            modalities=args.modalities,
+                            save_root=explain_root,
+                            log=log)
+            del model_best
+        if best_val_sparse_e != best_e and best_val_sparse_e != best_train_sparse_e:
+            log('----------------------------Explain best val sparse stage 2-----------------------------')
+            best_ckpt_path = os.path.join(ckpt_dir, 
+                                          (str(best_val_sparse_e) + '_' + '{0:.4f}.pth').format(0))
+            model_best = copy.deepcopy(model)
+            state_dict = torch.load(best_ckpt_path, map_location=device)
+            model_best.load_state_dict(state_dict)
+            model_best.to(device)
+            model_best = torch.nn.parallel.DataParallel(model_best)
+            explain_root = os.path.join(exp_dir, f'explain_stage_2_epoch_{best_val_sparse_e}')
+            if args.mm_fusion_mode == 'no_fusion':
+                select_topk_no_fusion(dataloader=train_loaders[1], 
+                                    model_parallel=model_best, 
+                                    args=args, 
+                                    device=device,
+                                    modalities=args.modalities,
+                                    save_root=explain_root,
+                                    log=log)
+            else:
+                select_topk(dataloader=train_loaders[1], 
+                            model_parallel=model_best, 
+                            args=args, 
+                            device=device,
+                            modalities=args.modalities,
+                            save_root=explain_root,
+                            log=log)
+            del model_best
+    
     if args.model_name == 'pedspace' and args.test_customized_proto:
         log('----------------------------Customize proto----------------------------')
         model = construct_model(args, device)

@@ -9,6 +9,7 @@ from .deposit import Deposit, deposit_config
 ACTIVATION_FUNC = {
     'relu': nn.ReLU,
     'leakyrelu': nn.LeakyReLU,
+    'softmax': nn.Softmax,
 }
 
 
@@ -120,10 +121,7 @@ class PedSpace(nn.Module):
             mu, sig = None, None
             for m in self.modalities:
                 if mu is None:
-                    try:
-                        mu = self.mu_enc[m](out[m])
-                    except:
-                        import pdb; pdb.set_trace()
+                    mu = self.mu_enc[m](out[m])
                     sig = self.sig_enc[m](out[m])
                     modality_effs[m] = None
                 else:
@@ -156,7 +154,7 @@ class PedSpace(nn.Module):
                  'enc_out': out,
                  'modality_effs': modality_effs,
                 'proto_simi': proto_simi,
-                'mm_proto_simi': mm_proto_simi,
+                'mm_proto_simi': mm_proto_simi, # None or {m:B n_proto}
                 'cls_logits': {}, 
                  'pred_traj': None, 
                  'pred_pose': None,

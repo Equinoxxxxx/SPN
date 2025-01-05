@@ -163,12 +163,13 @@ def select_topk_no_fusion(args,
     # select topk samples
     simi_mean = mm_proto_simi_stack.mean(dim=0)  # (P)
     simi_var = mm_proto_simi_stack.var(dim=0, unbiased=True)  # (P)
-    all_relative_var = (mm_proto_simi_stack - simi_mean.unsqueeze(0))**2 / (simi_var.unsqueeze(0) + 1e-5)  # (n_samples, P)
-    top_k_relative_var, top_k_rel_var_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
-    if args.topk_metric_explain == 'activation':
-        top_k_values, top_k_indices = torch.topk(mm_proto_simi_stack, args.topk_explain, dim=0)  # (k, P) (k, P)
-    elif args.topk_metric_explain == 'relative_var':
-        top_k_values, top_k_indices = top_k_relative_var, top_k_rel_var_indices
+    all_relative_var = (mm_proto_simi_stack - simi_mean.unsqueeze(0))**2 \
+        / (simi_var.unsqueeze(0) + 1e-5)  # (n_samples, P)
+    if args.topk_metric_explain == 'relative_var':
+        top_k_relative_var, top_k_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
+    elif args.topk_metric_explain == 'activation':
+        _, top_k_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
+        top_k_relative_var = torch.gather(all_relative_var, 0, top_k_indices)  # (k, P)
     else:
         raise ValueError(args.topk_metric_explain)
     
@@ -381,7 +382,11 @@ def select_topk_no_fusion(args,
                 traj = copy.deepcopy(all_inputs['traj_ori'][idx_mod].detach().cpu().int().numpy())  # obslen 4(int)
                 weights = copy.deepcopy(all_feat['social'][idx_mod].detach().cpu().numpy())  # obslen*n_neighbor
                 n_neighbor, obslen, _ = neighbor_bbox.shape
-                weights = weights.reshape(obslen, n_neighbor)  # obslen n_neighbor
+                if args.social_format == 'rel_loc':
+                    weights = weights.reshape(obslen, n_neighbor)  # obslen n_neighbor
+                elif args.social_format == 'ori_traj':
+                    weights = weights.reshape(obslen, n_neighbor+1)  # obslen n_neighbor+1
+                    weights = weights[:,1:] # obslen n_neighbor
                 set_id = all_sample_ids['set_id_int'][idx_mod]
                 vid_id = all_sample_ids['vid_id_int'][idx_mod]
                 img_nms = all_sample_ids['img_nm_int'][idx_mod]
