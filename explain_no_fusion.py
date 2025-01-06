@@ -165,6 +165,7 @@ def select_topk_no_fusion(args,
     simi_var = mm_proto_simi_stack.var(dim=0, unbiased=True)  # (P)
     all_relative_var = (mm_proto_simi_stack - simi_mean.unsqueeze(0))**2 \
         / (simi_var.unsqueeze(0) + 1e-5)  # (n_samples, P)
+    # top_k_relative_var, top_k_rel_var_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
     if args.topk_metric_explain == 'relative_var':
         top_k_relative_var, top_k_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
     elif args.topk_metric_explain == 'activation':

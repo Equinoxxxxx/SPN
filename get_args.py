@@ -73,7 +73,8 @@ def get_args():
     parser.add_argument('--mono_sem_align_eff', type=float, default=0)
     parser.add_argument('--cluster_loss_eff', type=float, default=0.001)
     parser.add_argument('--topk', type=int, default=5)
-    parser.add_argument('--topk_metric', type=str, default='activation')
+    parser.add_argument('--topk_metric', type=str, default='activation',
+                        help='relative_var/activation')
     parser.add_argument('--stoch_mse_type', type=str, default='best')
     # model
     parser.add_argument('--pretrain_mode', type=str, default='contrast')

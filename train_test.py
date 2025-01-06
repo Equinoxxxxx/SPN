@@ -122,7 +122,8 @@ def train_test_epoch(args,
 
         # forward
         b_start = time.time()
-        with grad_req:
+        # with grad_req:
+        with torch.no_grad():
             logits = {}
             if model_name == 'sgnet':
                 out = model(inputs)
