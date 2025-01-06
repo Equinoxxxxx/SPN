@@ -205,7 +205,7 @@ def construct_data_loader(args, log=print):
                                         shuffle=args.shuffle,
                                         num_workers=args.dataloader_workers,
                                         pin_memory=True,
-                                        drop_last=True)
+                                        drop_last=False)
         )
         val_loaders.append(
             [torch.utils.data.DataLoader(val_sets[stage][i], 
@@ -213,7 +213,7 @@ def construct_data_loader(args, log=print):
                                         shuffle=args.shuffle,
                                         num_workers=args.dataloader_workers,
                                         pin_memory=True,
-                                        drop_last=True
+                                        drop_last=False
                                         ) for i in range(len(val_sets[stage]))]
         )
         test_loaders.append(
@@ -222,7 +222,7 @@ def construct_data_loader(args, log=print):
                                         shuffle=args.shuffle,
                                         num_workers=args.dataloader_workers,
                                         pin_memory=True,
-                                        drop_last=True
+                                        drop_last=False
                                         ) for i in range(len(test_sets[stage]))]
         )
     return train_loaders, val_loaders, test_loaders

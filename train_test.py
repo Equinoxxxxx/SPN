@@ -122,8 +122,7 @@ def train_test_epoch(args,
 
         # forward
         b_start = time.time()
-        # with grad_req:
-        with torch.no_grad():
+        with grad_req:
             logits = {}
             if model_name == 'sgnet':
                 out = model(inputs)
@@ -197,10 +196,7 @@ def train_test_epoch(args,
             elif model_name in ('PCPA', 'ped_graph'):
                 out = model(inputs)
                 loss = 0
-                try:
-                    logits = out['cls_logits']
-                except:
-                    import pdb; pdb.set_trace()
+                logits = out['cls_logits']
                 if loss_params['cls_eff'] > 0:
                     for k in logits:
                         if n_iter == 0:
