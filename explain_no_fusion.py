@@ -25,7 +25,7 @@ def forwad_pass_no_fusion(dataloader,
                             modalities=None,
                             log=print,
                             ):
-    model_parallel.module.eval()
+    model_parallel.module.train()
     all_inputs = []
     all_targets = []
     all_info = []
@@ -98,9 +98,13 @@ def forwad_pass_no_fusion(dataloader,
     last_ped_id = data['ped_id_int']
     log(f'last ped id: {last_ped_id}')
     for k in inputs:
-        log(f'last {k}: {inputs[k].size()} \n {inputs[k]}') 
-    last_mm_proto_simi = out['mm_proto_simi']
-    log(f'last batch mm_proto_simi: {last_mm_proto_simi}')
+        log(f'last {k}: {inputs[k].size()} \n {inputs[k]}')
+    for k in out:
+        try:
+            log(f'last {k} shape: {out[k].size()}')
+        except:
+            pass
+        log(f'last {k} {out[k]}')
     return all_inputs, all_targets, all_info, all_outputs
 
 

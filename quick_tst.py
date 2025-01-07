@@ -122,5 +122,15 @@ if __name__ == '__main__':
     #                             ego_format=args.ego_format,
     #                             augment_mode=args.augment_mode,
     #                             )
-    a = '-12'
-    print(a.isdigit())
+    x = torch.tensor([[1,2,3,4],[5,6,7,8],[9,10,11,12]]).float()
+    class MyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = nn.Linear(4, 2)
+        def forward(self, x, is_train):
+            print(f'is_train: {is_train}')
+            return self.model(x)
+    model = MyModel()
+    model_p = nn.DataParallel(model).float().to('cuda:0')
+    y = model_p(x, is_train=True)
+    print(y)

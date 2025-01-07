@@ -243,12 +243,9 @@ def train_test_epoch(args,
                     batch_size, pred_len, n_dim = gt_traj.size()
                     obslen = pred_traj.size(3) - pred_len
                     pred_traj = pred_traj[:,:,:,obslen:].permute(0,3,1,2)  # B predlen K 4
-                    try:
-                        traj_mse = calc_stoch_mse(pred_traj,  # B predlen K 4
+                    traj_mse = calc_stoch_mse(pred_traj,  # B predlen K 4
                                               gt_traj,  # B predlen 4
                                               loss_params['stoch_mse_type'])
-                    except:
-                        import pdb; pdb.set_trace()
                     total_traj_mse += traj_mse.mean().item()
                 # ce loss
                 if loss_params['cls_eff'] > 0:
@@ -314,8 +311,8 @@ def train_test_epoch(args,
             # backward
             if is_train:
                 optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                # loss.backward()
+                # optimizer.step()
 
         # display
         data_prepare_time = b_start - b_end
@@ -350,9 +347,13 @@ def train_test_epoch(args,
             last_ped_id = data['ped_id_int']
             log(f'last ped id: {last_ped_id}')
             for k in inputs:
-                log(f'last {k}: {inputs[k].size()} \n {inputs[k]}') 
-            last_mm_proto_simi = out['mm_proto_simi']
-            log(f'last_mm_proto_simi: {last_mm_proto_simi}')
+                log(f'last {k}: {inputs[k].size()} \n {inputs[k]}')
+            for k in out:
+                try:
+                    log(f'last {k} shape: {out[k].size()}')
+                except:
+                    pass
+                log(f'last {k} {out[k]}')
             log(f'all_proto_simi when training/testing: \n{all_proto_simi.size()}\n{torch.sort(all_proto_simi,0)}')
         all_sparsity, all_topk_indices = calc_topk_monosem(all_proto_simi, 
                                                         args.topk,

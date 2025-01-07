@@ -727,7 +727,7 @@ def main(rank, world_size, args):
     if args.model_name == 'pedspace' and args.epochs1 > 0:
         log('----------------------------Explain best stage 1-----------------------------')
         best_ckpt_path = os.path.join(ckpt_dir, (str(best_e) + '_' + '{0:.4f}.pth').format(0))
-        model_best = copy.deepcopy(model)
+        model_best = copy.deepcopy(model_parallel.module)
         state_dict = torch.load(best_ckpt_path, map_location=device)
         model_best.load_state_dict(state_dict)
         model_best.to(device)
@@ -754,7 +754,7 @@ def main(rank, world_size, args):
             log('----------------------------Explain best train sparse stage 1-----------------------------')
             best_ckpt_path = os.path.join(ckpt_dir, 
                                           (str(best_train_sparse_e) + '_' + '{0:.4f}.pth').format(0))
-            model_best = copy.deepcopy(model)
+            model_best = copy.deepcopy(model_parallel.module)
             state_dict = torch.load(best_ckpt_path, map_location=device)
             model_best.load_state_dict(state_dict)
             model_best.to(device)
@@ -781,7 +781,7 @@ def main(rank, world_size, args):
             log('----------------------------Explain best val sparse stage 1-----------------------------')
             best_ckpt_path = os.path.join(ckpt_dir, 
                                           (str(best_val_sparse_e) + '_' + '{0:.4f}.pth').format(0))
-            model_best = copy.deepcopy(model)
+            model_best = copy.deepcopy(model_parallel.module)
             state_dict = torch.load(best_ckpt_path, map_location=device)
             model_best.load_state_dict(state_dict)
             model_best.to(device)
@@ -953,7 +953,7 @@ def main(rank, world_size, args):
     if args.model_name == 'pedspace' and args.epochs2 > 0:
         log('----------------------------Explain best stage 2-----------------------------')
         best_ckpt_path = os.path.join(ckpt_dir, (str(best_e) + '_' + '{0:.4f}.pth').format(0))
-        model_best = copy.deepcopy(model)
+        model_best = copy.deepcopy(model_parallel.module)
         state_dict = torch.load(best_ckpt_path, map_location=device)
         model_best.load_state_dict(state_dict)
         model_best.to(device)
@@ -980,7 +980,7 @@ def main(rank, world_size, args):
             log('----------------------------Explain best train sparse stage 2-----------------------------')
             best_ckpt_path = os.path.join(ckpt_dir, 
                                           (str(best_train_sparse_e) + '_' + '{0:.4f}.pth').format(0))
-            model_best = copy.deepcopy(model)
+            model_best = copy.deepcopy(model_parallel.module)
             state_dict = torch.load(best_ckpt_path, map_location=device)
             model_best.load_state_dict(state_dict)
             model_best.to(device)
@@ -1007,7 +1007,7 @@ def main(rank, world_size, args):
             log('----------------------------Explain best val sparse stage 2-----------------------------')
             best_ckpt_path = os.path.join(ckpt_dir, 
                                           (str(best_val_sparse_e) + '_' + '{0:.4f}.pth').format(0))
-            model_best = copy.deepcopy(model)
+            model_best = copy.deepcopy(model_parallel.module)
             state_dict = torch.load(best_ckpt_path, map_location=device)
             model_best.load_state_dict(state_dict)
             model_best.to(device)
