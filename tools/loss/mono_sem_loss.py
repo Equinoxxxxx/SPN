@@ -13,7 +13,8 @@ def get_topk_mono_scale(proto_simi, k):
 
 def calc_topk_monosem(proto_simi:torch.Tensor, 
                       k:int,
-                      topk_metric:str='relative_var'):
+                      topk_metric:str='relative_var',
+                      log=print):
     '''
     proto_simi: B n_proto
     k: int
@@ -31,6 +32,7 @@ def calc_topk_monosem(proto_simi:torch.Tensor,
         top_k_values = torch.gather(relative_variance, 0, top_k_indices)  # (k, P)
     else:
         raise ValueError(topk_metric)
+    log(f'top_k_relative_var when training/testing: {top_k_values}')
     # sparsity value
     sparsity = top_k_values.mean(dim=0)  # (k, P) -> (P)
 

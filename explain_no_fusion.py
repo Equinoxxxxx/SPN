@@ -23,6 +23,7 @@ def forwad_pass_no_fusion(dataloader,
                             model_parallel,
                             device='cuda:0',
                             modalities=None,
+                            log=print,
                             ):
     model_parallel.module.eval()
     all_inputs = []
@@ -85,7 +86,7 @@ def forwad_pass_no_fusion(dataloader,
                 if k == 'proto_simi':
                     out[k] = _out[k].detach().cpu()
                 elif k in ('feat', 'mm_proto_simi'):
-                    out[k] = {k2:_out[k][k2].detach().cpu() for k2 in _out[k].keys()}
+                    out[k] = {k2:_out[k][k2].detach().cpu() for k2 in _out[k]}
             all_inputs.append(inputs)  # img sklt ctx traj traj_unnormed traj_ori ego social obs_neighbor_bbox
             all_targets.append(targets)  # cross atomic complex communicative transporting age pred_traj pred_sklt
             all_info.append(info)  # set_id vid_id obj_id img_nm
@@ -93,6 +94,13 @@ def forwad_pass_no_fusion(dataloader,
             # all_batch_size.append(inputs[list(inputs.keys())[0]].shape[0])
             if n_iter%50 == 0:
                 print(f'cur mem allocated: {torch.cuda.memory_allocated(device)}')
+    log(f'proto: {model_parallel.module.proto_enc.weight.size()} \n {model_parallel.module.proto_enc.weight}')
+    last_ped_id = data['ped_id_int']
+    log(f'last ped id: {last_ped_id}')
+    for k in inputs:
+        log(f'last {k}: {inputs[k].size()} \n {inputs[k]}') 
+    last_mm_proto_simi = out['mm_proto_simi']
+    log(f'last batch mm_proto_simi: {last_mm_proto_simi}')
     return all_inputs, all_targets, all_info, all_outputs
 
 
@@ -109,7 +117,8 @@ def select_topk_no_fusion(args,
     all_inputs_batches, all_targets_batches, all_info_batches, all_outputs_batches = forwad_pass_no_fusion(dataloader,
                                                                             model_parallel,
                                                                             device,
-                                                                            modalities)
+                                                                            modalities,
+                                                                            log=log)
     nm_to_dataset = {}
     for d in dataloader.dataset.datasets:
         nm_to_dataset[d.dataset_name] = d
@@ -173,7 +182,9 @@ def select_topk_no_fusion(args,
         top_k_relative_var = torch.gather(all_relative_var, 0, top_k_indices)  # (k, P)
     else:
         raise ValueError(args.topk_metric_explain)
-    
+    log(f'mm_proto_simi.keys() when explaining: {mm_proto_simi.keys()}')
+    log(f'all_proto_simi when explaining: \n{mm_proto_simi_stack.size()}\n{torch.sort(mm_proto_simi_stack,0)}')
+    log(f'top_k_relative_var when explaining: {top_k_relative_var}')
     K,P = top_k_indices.shape
     # save
     log(f'Saving sample info')
@@ -440,15 +451,23 @@ def plot_all_explanation_no_fusion(explain_info,
     explain_info = sorted(explain_info, key=lambda x: x['mean_rel_var'], reverse=True)
 
     # Calculate the total height and width of the canvas
-    total_height = P * (part_height + spacing)
+    title_height = 30
+    total_height = P * (part_height + spacing) + title_height
     total_width = (K+2) * (part_width + spacing)
     txt_height = part_height - img_height
 
     # Create a blank canvas
     canvas = np.ones((total_height, total_width, 3), dtype=np.uint8) * 255
 
+    # Draw the title
+    all_sparsity = [block['mean_rel_var'] for block in explain_info]
+    all_sparsity = sum(all_sparsity) / len(all_sparsity)
+    title = f'Mean of all top k MS: {round(float(all_sparsity),3)}'
+    cv2.putText(canvas, title, (spacing, 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+
     for i, block in enumerate(explain_info):
-        block_y_offset = i * (part_height + spacing)
+        block_y_offset = i * (part_height + spacing) + title_height
         # Draw mean_rel_var
         mean_rel_var = block['mean_rel_var']
         proto_title = f'prototype {block["proto_id"]}'

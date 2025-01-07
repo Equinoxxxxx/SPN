@@ -334,7 +334,7 @@ def train_test_epoch(args,
                 display_dict['logit'] = [round(logits['cross'][0, 0].item(), 4), round(logits['cross'][0, 1].item(), 4)]
                 display_dict['avg logit'] = [round(mean_logit[0].item(), 4), round(mean_logit[1].item(), 4)]
         tbar.set_postfix(display_dict)
-        del inputs
+        # del inputs
         if is_train:
             del loss
         torch.cuda.empty_cache()
@@ -345,9 +345,19 @@ def train_test_epoch(args,
     # all sparsity
     if args.model_name == 'pedspace':
         all_proto_simi = torch.cat(all_proto_simi, dim=0)  # n_samples(*M) P
+        if is_train:
+            log(f'proto: {model.module.proto_enc.weight.size()} \n {model.module.proto_enc.weight}')
+            last_ped_id = data['ped_id_int']
+            log(f'last ped id: {last_ped_id}')
+            for k in inputs:
+                log(f'last {k}: {inputs[k].size()} \n {inputs[k]}') 
+            last_mm_proto_simi = out['mm_proto_simi']
+            log(f'last_mm_proto_simi: {last_mm_proto_simi}')
+            log(f'all_proto_simi when training/testing: \n{all_proto_simi.size()}\n{torch.sort(all_proto_simi,0)}')
         all_sparsity, all_topk_indices = calc_topk_monosem(all_proto_simi, 
                                                         args.topk,
-                                                        args.topk_metric)
+                                                        args.topk_metric,
+                                                        log)
         model.module.all_sparsity = all_sparsity # P,
     # calc metric
     acc_e = {}

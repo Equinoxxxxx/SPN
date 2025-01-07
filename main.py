@@ -205,7 +205,7 @@ def construct_data_loader(args, log=print):
                                         shuffle=args.shuffle,
                                         num_workers=args.dataloader_workers,
                                         pin_memory=True,
-                                        drop_last=False)
+                                        drop_last=True)
         )
         val_loaders.append(
             [torch.utils.data.DataLoader(val_sets[stage][i], 
@@ -213,7 +213,7 @@ def construct_data_loader(args, log=print):
                                         shuffle=args.shuffle,
                                         num_workers=args.dataloader_workers,
                                         pin_memory=True,
-                                        drop_last=False
+                                        drop_last=True
                                         ) for i in range(len(val_sets[stage]))]
         )
         test_loaders.append(
@@ -222,7 +222,7 @@ def construct_data_loader(args, log=print):
                                         shuffle=args.shuffle,
                                         num_workers=args.dataloader_workers,
                                         pin_memory=True,
-                                        drop_last=False
+                                        drop_last=True
                                         ) for i in range(len(test_sets[stage]))]
         )
     return train_loaders, val_loaders, test_loaders
@@ -934,7 +934,7 @@ def main(rank, world_size, args):
             save_root = os.path.join(exp_dir, 'explain', 'stage2_e'+str(e))
             makedir(save_root)
             if args.mm_fusion_mode == 'no_fusion':
-                select_topk_no_fusion(dataloader=train_loaders[0], 
+                select_topk_no_fusion(dataloader=train_loaders[1], 
                                     model_parallel=model_parallel, 
                                     args=args, 
                                     device=device,
@@ -942,7 +942,7 @@ def main(rank, world_size, args):
                                     save_root=save_root,
                                     log=log)
             else:
-                select_topk(dataloader=train_loaders[0], 
+                select_topk(dataloader=train_loaders[1], 
                             model_parallel=model_parallel, 
                             args=args, 
                             device=device,
