@@ -28,7 +28,6 @@ def train_test_epoch(args,
                      device='cuda:0',
                      modalities=None,
                      loss_params=None,
-                     stage=0,
                      ):
     is_train = optimizer is not None
     if is_train:
@@ -197,7 +196,10 @@ def train_test_epoch(args,
             elif model_name in ('PCPA', 'ped_graph'):
                 out = model(inputs)
                 loss = 0
-                logits = out['cls_logits']
+                try:
+                    logits = out['cls_logits']
+                except:
+                    import pdb; pdb.set_trace()
                 if loss_params['cls_eff'] > 0:
                     for k in logits:
                         if n_iter == 0:
@@ -217,19 +219,11 @@ def train_test_epoch(args,
                 out = model(batch, is_train)
                 logits = out['cls_logits']
                 loss = 0
-                loss_eff_dict = {}
-                loss_eff_idx = 0
                 # pose loss
                 if loss_params['pose_mse_eff'] > 0:
                     pose_loss = out['pose_loss'].mean()
                     total_pose_loss += pose_loss.item()
-                    if args.trainable_eff:
-                        log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
-                        loss = loss + 0.5/torch.exp(log_sig_sq)*pose_loss + 0.5*log_sig_sq
-                        loss_eff_dict['pose_mse_eff'] = loss_eff_idx
-                        loss_eff_idx += 1
-                    else:
-                        loss = loss + pose_loss * loss_params['pose_mse_eff']
+                    loss = loss + pose_loss * loss_params['pose_mse_eff']
                     # predicted pose
                     pred_pose = out['pred_pose']  # B K ndim*nj obslen+predlen
                     gt_pose = targets['pred_sklt']  # B ndim predlen nj
@@ -245,22 +239,19 @@ def train_test_epoch(args,
                 if loss_params['mse_eff'] > 0:
                     traj_loss = out['traj_loss'].mean()
                     total_traj_loss += traj_loss.item()
-                    if args.trainable_eff:
-                        log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
-                        loss = loss + 0.5/torch.exp(log_sig_sq)*traj_loss + 0.5*log_sig_sq
-                        loss_eff_dict['mse_eff'] = loss_eff_idx
-                        loss_eff_idx += 1
-                    else:
-                        loss = loss + traj_loss * loss_params['mse_eff']
+                    loss = loss + traj_loss * loss_params['mse_eff']
                     # predicted traj
                     pred_traj = out['pred_traj']  # B K 4 obslen+predlen
                     gt_traj = targets['pred_traj']  # B predlen 4
                     batch_size, pred_len, n_dim = gt_traj.size()
                     obslen = pred_traj.size(3) - pred_len
                     pred_traj = pred_traj[:,:,:,obslen:].permute(0,3,1,2)  # B predlen K 4
-                    traj_mse = calc_stoch_mse(pred_traj,  # B predlen K 4
+                    try:
+                        traj_mse = calc_stoch_mse(pred_traj,  # B predlen K 4
                                               gt_traj,  # B predlen 4
                                               loss_params['stoch_mse_type'])
+                    except:
+                        import pdb; pdb.set_trace()
                     total_traj_mse += traj_mse.mean().item()
                 # ce loss
                 if loss_params['cls_eff'] > 0:
@@ -279,13 +270,7 @@ def train_test_epoch(args,
                         ce_dict[k] = cls_loss_func(logits[k], 
                                                    targets[k], 
                                                    weight=cls_weights_multi[k])
-                        if args.trainable_eff:
-                            log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
-                            loss = loss + 0.5/torch.exp(log_sig_sq)*ce_dict[k] + 0.5*log_sig_sq
-                            loss_eff_dict['cls_eff'] = loss_eff_idx
-                        else:
-                            loss = loss + ce_dict[k] * loss_params['cls_eff']
-                    loss_eff_idx += 1
+                        loss = loss + ce_dict[k] * loss_params['cls_eff']
                 # top k mono loss
                 if args.mm_fusion_mode == 'no_fusion':
                     proto_simi = [out['mm_proto_simi'][m] for m in out['mm_proto_simi']]
@@ -300,33 +285,15 @@ def train_test_epoch(args,
                 if loss_params['diversity_loss_eff'] > 0:
                     diversity_loss = calc_diversity_loss(model.module.proto_enc.weight)
                     total_diversity_loss += diversity_loss.item()
-                    if args.trainable_eff:
-                        log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
-                        loss = loss + 0.5/torch.exp(log_sig_sq)*diversity_loss + 0.5*log_sig_sq
-                        loss_eff_dict['diversity_loss_eff'] = loss_eff_idx
-                        loss_eff_idx += 1
-                    else:
-                        loss = loss + diversity_loss * loss_params['diversity_loss_eff']
+                    loss = loss + diversity_loss * loss_params['diversity_loss_eff']
                 if loss_params['mono_sem_eff'] > 0:
                     mono_sem_loss = -batch_sparsity.mean()
                     total_mono_sem_loss += mono_sem_loss.item()
-                    if args.trainable_eff:
-                        log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
-                        loss = loss + 0.5/torch.exp(log_sig_sq)*mono_sem_loss + 0.5*log_sig_sq
-                        loss_eff_dict['mono_sem_eff'] = loss_eff_idx
-                        loss_eff_idx += 1
-                    else:
-                        loss = loss + mono_sem_loss * loss_params['mono_sem_eff']
+                    loss = loss + mono_sem_loss * loss_params['mono_sem_eff']
                 if loss_params['mono_sem_l1_eff'] > 0:
                     mono_sem_l1_loss = batch_sparsity.abs().mean()
                     total_mono_sem_l1_loss += mono_sem_l1_loss.item()
-                    if args.trainable_eff:
-                        log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
-                        loss = loss + 0.5/torch.exp(log_sig_sq)*mono_sem_l1_loss + 0.5*log_sig_sq
-                        loss_eff_dict['mono_sem_l1_eff'] = loss_eff_idx
-                        loss_eff_idx += 1
-                    else:
-                        loss = loss + mono_sem_l1_loss * loss_params['mono_sem_l1_eff']
+                    loss = loss + mono_sem_l1_loss * loss_params['mono_sem_l1_eff']
                 if loss_params['mono_sem_align_eff'] > 0 and loss_params['cls_eff'] > 0:
                     mono_sem_align_loss = 0
                     for act_set in logits:
@@ -335,13 +302,7 @@ def train_test_epoch(args,
                                                                         batch_sparsity,
                                                                         loss_params['mono_sem_align_func'])
                     total_mono_sem_align_loss += mono_sem_align_loss.item()
-                    if args.trainable_eff:
-                        log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
-                        loss = loss + 0.5/torch.exp(log_sig_sq)* mono_sem_align_loss + 0.5*log_sig_sq
-                        loss_eff_dict['mono_sem_align_eff'] = loss_eff_idx
-                        loss_eff_idx += 1
-                    else:
-                        loss = loss + mono_sem_align_loss * loss_params['mono_sem_align_eff']
+                    loss = loss + mono_sem_align_loss * loss_params['mono_sem_align_eff']
                 if loss_params['cluster_loss_eff'] > 0:
                     modality_simi_mats = calc_batch_simi_simple(feat_dict=out['enc_out'],
                                                                 log_logit_scale=model.module.logit_scale,
@@ -349,13 +310,7 @@ def train_test_epoch(args,
                                                                 pair_mode='pair_wise')
                     cluster_loss = calc_contrast_loss(modality_simi_mats,
                                                        pair_mode='pair_wise')
-                    if args.trainable_eff:
-                        log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
-                        loss = loss + 0.5/torch.exp(log_sig_sq)* cluster_loss + 0.5*log_sig_sq
-                        loss_eff_dict['cluster_loss_eff'] = loss_eff_idx
-                        loss_eff_idx += 1
-                    else:
-                        loss = loss + cluster_loss * loss_params['cluster_loss_eff']
+                    loss = loss + cluster_loss * loss_params['cluster_loss_eff']
                     total_cluster_loss += cluster_loss.item()
             else:
                 raise NotImplementedError()
@@ -364,10 +319,7 @@ def train_test_epoch(args,
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                if isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
-                    scheduler.step()
-        if is_train and scheduler and not isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
-            scheduler.step()
+
         # display
         data_prepare_time = b_start - b_end
         b_end = time.time()
@@ -396,10 +348,9 @@ def train_test_epoch(args,
     # all sparsity
     if args.model_name == 'pedspace':
         all_proto_simi = torch.cat(all_proto_simi, dim=0)  # n_samples(*M) P
-        all_sparsity, all_topk_indices = calc_topk_monosem(all_proto_simi, 
-                                                    args.topk,
-                                                    args.topk_metric,
-                                                    log)
+        all_sparsity, all_topk_indices = calc_topk_monosem(proto_simi, 
+                                                        args.topk,
+                                                        args.topk_metric)
         model.module.all_sparsity = all_sparsity # P,
     # calc metric
     acc_e = {}
@@ -495,7 +446,5 @@ def train_test_epoch(args,
         log(f'\t mean batch sparsity: {total_batch_sparsity / (n_iter+1)}')
         res['all_sparsity'] = all_sparsity.mean().item()
         log(f'\t all sparsity: {all_sparsity.mean().item()}')
-        if args.trainable_eff:
-            log(f'\t loss eff: {loss_eff_dict}\n{model.module.loss_eff[stage]}')
     log('\n')
     return res

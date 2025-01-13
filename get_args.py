@@ -42,8 +42,8 @@ def get_args():
     parser.add_argument('--lr2', type=float, default=0.001)
     parser.add_argument('--backbone_lr1', type=float, default=0.0001)
     parser.add_argument('--backbone_lr2', type=float, default=0.0001)
-    parser.add_argument('--scheduler_type1', type=str, default='onecycle')
-    parser.add_argument('--scheduler_type2', type=str, default='onecycle')
+    parser.add_argument('--scheduler_type1', type=str, default=None)
+    parser.add_argument('--scheduler_type2', type=str, default=None)
     parser.add_argument('--onecycle_div_f', type=int, default=10)
     parser.add_argument('--batch_schedule', type=int, default=0)
     parser.add_argument('--lr_step_size', type=int, default=5)
@@ -55,6 +55,7 @@ def get_args():
     parser.add_argument('--key_metric', type=str, default='f1')
     parser.add_argument('--key_act_set', type=str, default='cross')
     # loss
+    parser.add_argument('--trainable_eff', type=int, default=0)
     parser.add_argument('--mse_eff1', type=float, default=1.)
     parser.add_argument('--mse_eff2', type=float, default=0.1)
     parser.add_argument('--pose_mse_eff1', type=float, default=1.)
@@ -73,7 +74,7 @@ def get_args():
     parser.add_argument('--mono_sem_align_eff', type=float, default=0)
     parser.add_argument('--cluster_loss_eff', type=float, default=0.001)
     parser.add_argument('--topk', type=int, default=5)
-    parser.add_argument('--topk_metric', type=str, default='activation',
+    parser.add_argument('--topk_metric', type=str, default='relative_var',
                         help='relative_var/activation')
     parser.add_argument('--stoch_mse_type', type=str, default='best')
     # model
@@ -242,4 +243,26 @@ def process_args(args):
         args.m_settings[m] = {
             'backbone_name': getattr(args, f'{m}_backbone_name'),
         }
+    args.n_loss = [0,0]
+    args.n_loss[0] = sum([int(args.mse_eff[0] > 0), 
+                         int(args.pose_mse_eff[0] > 0), 
+                         int(args.cls_eff[0] > 0),
+                         int(args.logsig_loss_eff > 0),
+                        int(args.diversity_loss_eff > 0),
+                        int(args.mono_sem_eff > 0),
+                        int(args.mono_sem_l1_eff > 0),
+                        int(args.mono_sem_align_eff > 0),
+                        int(args.cluster_loss_eff > 0),
+                         ])
+    args.n_loss[1] = sum([int(args.mse_eff[1] > 0),
+                        int(args.pose_mse_eff[1] > 0),
+                        int(args.cls_eff[1] > 0),
+                        int(args.logsig_loss_eff > 0),
+                        int(args.diversity_loss_eff > 0),
+                        int(args.mono_sem_eff > 0),
+                        int(args.mono_sem_l1_eff > 0),
+                        int(args.mono_sem_align_eff > 0),
+                        int(args.cluster_loss_eff > 0),
+                        ])
+    
     return args

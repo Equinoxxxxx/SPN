@@ -9,7 +9,6 @@ from .deposit import Deposit, deposit_config
 ACTIVATION_FUNC = {
     'relu': nn.ReLU,
     'leakyrelu': nn.LeakyReLU,
-    'softmax': nn.Softmax,
 }
 
 
@@ -49,10 +48,6 @@ class PedSpace(nn.Module):
         self.logit_scale = nn.parameter.Parameter(
             torch.ones([]) * np.log(1 / 0.07))
         self.all_sparsity = None
-        # loss weights
-        if args.trainable_eff:
-            # 2logsigma
-            self.loss_eff = nn.Parameter(torch.rand(2, max(args.n_loss[0], args.n_loss[1])))
         # encoders
         self.encoders = {}
         for m in self.modalities:
@@ -125,7 +120,10 @@ class PedSpace(nn.Module):
             mu, sig = None, None
             for m in self.modalities:
                 if mu is None:
-                    mu = self.mu_enc[m](out[m])
+                    try:
+                        mu = self.mu_enc[m](out[m])
+                    except:
+                        import pdb; pdb.set_trace()
                     sig = self.sig_enc[m](out[m])
                     modality_effs[m] = None
                 else:
@@ -158,7 +156,7 @@ class PedSpace(nn.Module):
                  'enc_out': out,
                  'modality_effs': modality_effs,
                 'proto_simi': proto_simi,
-                'mm_proto_simi': mm_proto_simi, # None or {m:B n_proto}
+                'mm_proto_simi': mm_proto_simi,
                 'cls_logits': {}, 
                  'pred_traj': None, 
                  'pred_pose': None,

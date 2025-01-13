@@ -25,7 +25,7 @@ def forwad_pass_no_fusion(dataloader,
                             modalities=None,
                             log=print,
                             ):
-    model_parallel.module.train()
+    model_parallel.module.eval()
     all_inputs = []
     all_targets = []
     all_info = []
@@ -94,17 +94,17 @@ def forwad_pass_no_fusion(dataloader,
             # all_batch_size.append(inputs[list(inputs.keys())[0]].shape[0])
             if n_iter%50 == 0:
                 print(f'cur mem allocated: {torch.cuda.memory_allocated(device)}')
-    log(f'proto: {model_parallel.module.proto_enc.weight.size()} \n {model_parallel.module.proto_enc.weight}')
-    last_ped_id = data['ped_id_int']
-    log(f'last ped id: {last_ped_id}')
-    for k in inputs:
-        log(f'last {k}: {inputs[k].size()} \n {inputs[k]}')
-    for k in out:
-        try:
-            log(f'last {k} shape: {out[k].size()}')
-        except:
-            pass
-        log(f'last {k} {out[k]}')
+    # log(f'proto: {model_parallel.module.proto_enc.weight.size()} \n {model_parallel.module.proto_enc.weight}')
+    # last_ped_id = data['ped_id_int']
+    # log(f'last ped id: {last_ped_id}')
+    # for k in inputs:
+    #     log(f'last {k}: {inputs[k].size()} \n {inputs[k]}')
+    # for k in _out:
+    #     try:
+    #         log(f'last {k} shape: {_out[k].size()}')
+    #     except:
+    #         pass
+    #     log(f'last {k} {_out[k]}')
     return all_inputs, all_targets, all_info, all_outputs
 
 
@@ -176,183 +176,237 @@ def select_topk_no_fusion(args,
     # select topk samples
     simi_mean = mm_proto_simi_stack.mean(dim=0)  # (P)
     simi_var = mm_proto_simi_stack.var(dim=0, unbiased=True)  # (P)
-    all_relative_var = (mm_proto_simi_stack - simi_mean.unsqueeze(0))**2 \
+    all_relative_var = (mm_proto_simi_stack - simi_mean)**2 \
         / (simi_var.unsqueeze(0) + 1e-5)  # (n_samples, P)
-    # top_k_relative_var, top_k_rel_var_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
-    if args.topk_metric_explain == 'relative_var':
-        top_k_relative_var, top_k_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
-    elif args.topk_metric_explain == 'activation':
-        _, top_k_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
-        top_k_relative_var = torch.gather(all_relative_var, 0, top_k_indices)  # (k, P)
-    else:
-        raise ValueError(args.topk_metric_explain)
-    log(f'mm_proto_simi.keys() when explaining: {mm_proto_simi.keys()}')
-    log(f'all_proto_simi when explaining: \n{mm_proto_simi_stack.size()}\n{torch.sort(mm_proto_simi_stack,0)}')
-    log(f'top_k_relative_var when explaining: {top_k_relative_var}')
-    K,P = top_k_indices.shape
-    # save
-    log(f'Saving sample info')
-    explain_info = []
-    tbar = tqdm(range(P), miniters=1)
-    for p in tbar:
-        last_weights_cur_proto = {act:model_parallel.module.proto_dec[act].weight[:,p].detach().cpu().numpy() \
-                                  for act in model_parallel.module.proto_dec.keys()}
-        cur_p_rel_var = top_k_relative_var[:,p].mean().cpu().numpy()
-        explain_info.append({'mean_rel_var':cur_p_rel_var,
-                            'last_weights':last_weights_cur_proto,
-                            'proto_id':p,
-                            'sample_info':[]})
-        for k in range(K):
-            idx_repeat = top_k_indices[k,p]
-            idx_mod = idx_repeat % N
-            # info with idx_repeat
-            modality = ID_TO_MODALITY[all_modality_ids_stack[idx_repeat].int().item()] # str
-            proto_simi = copy.deepcopy(mm_proto_simi_stack[idx_repeat].detach().cpu().numpy()) # P
-            # info with idx_mod
-            sample_ids = {k:all_sample_ids[k][idx_mod] for k in all_sample_ids.keys()}
-            act_cls = {act:all_act_cls[act][idx_mod].detach().cpu().int().numpy() for act in all_act_cls.keys()}
-            content = [f'mean relative var of cur proto: {cur_p_rel_var}', 
-                       f'relative var of cur sample: {top_k_relative_var[k,p].item()}', 
-                       f'sample ids: {sample_ids}\n', 
-                       f'modality: {modality}\n',
-                       f'labels: {act_cls}\n', 
-                       f'proto_simi: {proto_simi[p]}\n',
-                       f'last weights of cur proto: {last_weights_cur_proto}\n',
-                       ]
-            save_path = os.path.join(save_root, str(p), str(k))
-            makedir(save_path)
-            write_info_txt(content, 
-                           os.path.join(save_path, 'sample_info.txt'))
-            explain_info[p]['sample_info'].append({'modality': modality,
-                                                    'labels': act_cls,
-                                                    'image': None,
-                                                    'rel_var': top_k_relative_var[k,p].item(),
-                                                    'proto_simi': proto_simi[p],
-                                                  })
-            # visualize
-            if modality == 'img':
-                all_img = all_inputs['img']
-                img = copy.deepcopy(all_img[idx_mod].detach().cpu().numpy()) # 3 T H W
-                if args.model_color_order == 'RGB':
-                    img = img[[2,1,0],:]
-                img_mean, img_std = img_mean_std_BGR(args.img_norm_mode)  # BGR
-                img = recover_norm_imgs(img, img_mean, img_std)  # 3 T H W
-                img = img.transpose(1,2,3,0).astype(np.int32)  # T H W 3
-                # 2D case
-                if 'deeplab' in args.img_backbone_name or 'vit' in args.img_backbone_name:
-                    img = img[-1:]  # 1 H W 3
-                # get feature map
-                feat = copy.deepcopy(all_feat['img'][idx_mod].detach().cpu())  # C (T) H W
-                if len(feat.shape) == 3:
-                    feat = feat.unsqueeze(1)  # C 1 H W
-                feat = feat.numpy()
-                feat = feat.numpy().transpose(1,2,3,0)  # 1 H W C
-                save_path = os.path.join(save_root, str(p), str(k), 'img')
+    for topk_metric in ['relative_var', 'activation']:
+        # top_k_relative_var, top_k_rel_var_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
+        if topk_metric == 'relative_var':
+            top_k_relative_var, top_k_indices = torch.topk(all_relative_var, args.topk_explain, dim=0)  # (k, P)
+        elif topk_metric == 'activation':
+            _, top_k_indices = torch.topk(mm_proto_simi_stack, args.topk_explain, dim=0)  # (k, P)
+            top_k_relative_var = torch.gather(all_relative_var, 0, top_k_indices)  # (k, P)
+        else:
+            raise ValueError(topk_metric)
+        # ########################################################################
+        # # log(f'simi mean {simi_mean}\n simi var {simi_var}')
+        # log(f'mm_proto_simi.keys() when explaining: {mm_proto_simi.keys()}')
+        # log(f'all_proto_simi when explaining: \n{mm_proto_simi_stack.size()}\n{torch.sort(mm_proto_simi_stack,0)}')
+        # log(f'top_k_relative_var when explaining: {top_k_relative_var}')
+        # ########################################################################
+        K,P = top_k_indices.shape
+        # save
+        log(f'Saving sample info')
+        explain_info = []
+        tbar = tqdm(range(P), miniters=1)
+        for p in tbar:
+            last_weights_cur_proto = {act:model_parallel.module.proto_dec[act].weight[:,p].detach().cpu().numpy() \
+                                    for act in model_parallel.module.proto_dec.keys()}
+            cur_p_rel_var = top_k_relative_var[:,p].mean().cpu().numpy()
+            explain_info.append({'mean_rel_var':cur_p_rel_var,
+                                'last_weights':last_weights_cur_proto,
+                                'proto_id':p,
+                                'sample_info':[]})
+            for k in range(K):
+                idx_repeat = top_k_indices[k,p]
+                idx_mod = idx_repeat % N
+                # info with idx_repeat
+                modality = ID_TO_MODALITY[all_modality_ids_stack[idx_repeat].int().item()] # str
+                proto_simi = copy.deepcopy(mm_proto_simi_stack[idx_repeat].detach().cpu().numpy()) # P
+                # info with idx_mod
+                sample_ids = {k:all_sample_ids[k][idx_mod] for k in all_sample_ids.keys()}
+                act_cls = {act:all_act_cls[act][idx_mod].detach().cpu().int().numpy() for act in all_act_cls.keys()}
+                content = [f'mean relative var of cur proto: {cur_p_rel_var}', 
+                        f'relative var of cur sample: {top_k_relative_var[k,p].item()}', 
+                        f'sample ids: {sample_ids}\n', 
+                        f'modality: {modality}\n',
+                        f'labels: {act_cls}\n', 
+                        f'proto_simi: {proto_simi[p]}\n',
+                        f'last weights of cur proto: {last_weights_cur_proto}\n',
+                        ]
+                save_path = os.path.join(save_root, topk_metric, str(p), str(k))
                 makedir(save_path)
-                mean_dir = os.path.join(save_path, 'mean')
-                makedir(mean_dir)
-                max_dir = os.path.join(save_path, 'max')
-                makedir(max_dir)
-                min_dir = os.path.join(save_path, 'min')
-                makedir(min_dir)
-                mean_mean, mean_max, mean_min, mean_overlay_imgs, heatmaps = visualize_featmap3d(feat,img, mode='mean', save_dir=mean_dir)
-                max_mean, max_max, max_min, _, _ = visualize_featmap3d(feat,img, mode='max', save_dir=max_dir)
-                min_mean, min_max, min_min, _, _ = visualize_featmap3d(feat,img, mode='min', save_dir=min_dir)
-                # write_info_txt([mean_mean, mean_max, mean_min, max_mean, max_max, max_min, min_mean, min_max, min_min],
-                #                os.path.join(save_path, 'feat_info.txt'))
-                max_t = np.argmax(np.max(heatmaps, axis=(1,2,3)))
-                cv2.imwrite(os.path.join(save_path, 'mean_max_t.png'), mean_overlay_imgs[max_t])
-                if P <= 100:
-                    explain_info[p]['sample_info'][k]['image'] = mean_overlay_imgs[max_t]
-                else:
-                    explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'mean_max_t.png')
-            elif modality == 'ctx':
-                all_img = all_inputs['ctx']
-                img = copy.deepcopy(all_img[idx_mod].detach().cpu().numpy()) # 3/4 (T) H W
-                if 'ped_graph' in args.ctx_format:
-                    img = img[:3] # 4 T H W -> 3 T H W
-                # RGB --> BGR
-                if args.model_color_order == 'RGB':
-                    img = img[[2,1,0]]
-                img_mean, img_std = img_mean_std_BGR(args.img_norm_mode)  # BGR
-                img = recover_norm_imgs(img, img_mean, img_std)  # 3 T H W
-                img = img.transpose(1,2,3,0).astype(np.int32)  # T H W 3
-                # 2D case
-                if 'deeplab' in args.ctx_backbone_name or 'vit' in args.ctx_backbone_name:
-                    img = img[-1:]  # 1 H W 3
-                # get feature map
-                feat = copy.deepcopy(all_feat['ctx'][idx_mod].detach().cpu())  # C (T) H W
-                if len(feat.shape) == 3:
-                    feat = feat.unsqueeze(1)  # C 1 H W
-                feat = feat.numpy().transpose(1,2,3,0)  # 1 H W C
-                save_path = os.path.join(save_root, str(p), str(k), 'ctx')
-                makedir(save_path)
-                mean_dir = os.path.join(save_path, 'mean')
-                makedir(mean_dir)
-                max_dir = os.path.join(save_path, 'max')
-                makedir(max_dir)
-                min_dir = os.path.join(save_path, 'min')
-                makedir(min_dir)
-                ori_dir = os.path.join(save_path, 'ori')
-                makedir(ori_dir)
-                cv2.imwrite(os.path.join(ori_dir, 'ori.png'), img[-1])
-                mean_mean, mean_max, mean_min, mean_overlay_imgs, heatmaps = visualize_featmap3d(feat,img, mode='mean', save_dir=mean_dir)
-                max_mean, max_max, max_min, _, _ = visualize_featmap3d(feat,img, mode='max', save_dir=max_dir)
-                min_mean, min_max, min_min, _, _ = visualize_featmap3d(feat,img, mode='min', save_dir=min_dir)
-                # write_info_txt([mean_mean, mean_max, mean_min, max_mean, max_max, max_min, min_mean, min_max, min_min],
-                #                os.path.join(save_path, 'feat_info.txt'))
-                max_t = np.argmax(np.max(heatmaps, axis=(1,2,3)))
-                cv2.imwrite(os.path.join(save_path, 'mean_max_t.png'), mean_overlay_imgs[max_t])
-                if P <= 100:
-                    explain_info[p]['sample_info'][k]['image'] = mean_overlay_imgs[max_t]
-                else:
-                    explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'mean_max_t.png')
-            elif modality == 'sklt':
-                traj = copy.deepcopy(all_inputs['traj_ori'][idx_mod].detach().cpu().int().numpy())  # T 4(int)
-                sklt_coords = copy.deepcopy(all_inputs['sklt'][idx_mod].detach().cpu().numpy())  # 2 T nj
-                feat = copy.deepcopy(all_feat['sklt'][idx_mod].detach().cpu().numpy())  # obslen*nj
-                save_path = os.path.join(save_root, str(p), str(k), 'sklt')
-                makedir(save_path)
-                if 'coord' in args.sklt_format and 'transformer' in args.sklt_backbone_name:
-                    nd, obslen, nj = sklt_coords.shape
-                    set_id = all_sample_ids['set_id_int'][idx_mod]
-                    vid_id = all_sample_ids['vid_id_int'][idx_mod]
-                    img_nms = all_sample_ids['img_nm_int'][idx_mod]
-                    obj_id = all_sample_ids['ped_id_int'][idx_mod]
-                    dataset_name = all_sample_ids['dataset_name'][idx_mod].detach().item()
-                    dataset_name = ID_TO_DATASET[dataset_name]  # int --> str
-                    # de-normalize
-                    if '0-1' in args.sklt_format:
-                        sklt_coords = recover_norm_sklt(sklt_coords, dataset_name)  # 2 T nj (int)
-                    sklt_coords = sklt_coords.transpose(1,2,0)  # T nj 2
-                    feat = feat.reshape(obslen, nj)  # obslen nj
-                    max_t = np.argmax(np.max(feat, axis=(1,)))
-                    img_path = get_sklt_img_path(dataset_name,
+                write_info_txt(content, 
+                            os.path.join(save_path, 'sample_info.txt'))
+                explain_info[p]['sample_info'].append({'modality': modality,
+                                                        'labels': act_cls,
+                                                        'image': None,
+                                                        'rel_var': top_k_relative_var[k,p].item(),
+                                                        'proto_simi': proto_simi[p],
+                                                    })
+                # visualize
+                if modality == 'img':
+                    all_img = all_inputs['img']
+                    img = copy.deepcopy(all_img[idx_mod].detach().cpu().numpy()) # 3 T H W
+                    if args.model_color_order == 'RGB':
+                        img = img[[2,1,0],:]
+                    img_mean, img_std = img_mean_std_BGR(args.img_norm_mode)  # BGR
+                    img = recover_norm_imgs(img, img_mean, img_std)  # 3 T H W
+                    img = img.transpose(1,2,3,0).astype(np.int32)  # T H W 3
+                    # 2D case
+                    if 'deeplab' in args.img_backbone_name or 'vit' in args.img_backbone_name:
+                        img = img[-1:]  # 1 H W 3
+                    # get feature map
+                    feat = copy.deepcopy(all_feat['img'][idx_mod].detach().cpu())  # C (T) H W
+                    if len(feat.shape) == 3:
+                        feat = feat.unsqueeze(1)  # C 1 H W
+                    feat = feat.numpy()
+                    feat = feat.numpy().transpose(1,2,3,0)  # 1 H W C
+                    save_path = os.path.join(save_root, topk_metric, str(p), str(k), 'img')
+                    makedir(save_path)
+                    mean_dir = os.path.join(save_path, 'mean')
+                    makedir(mean_dir)
+                    max_dir = os.path.join(save_path, 'max')
+                    makedir(max_dir)
+                    min_dir = os.path.join(save_path, 'min')
+                    makedir(min_dir)
+                    mean_mean, mean_max, mean_min, mean_overlay_imgs, heatmaps = visualize_featmap3d(feat,img, mode='mean', save_dir=mean_dir)
+                    max_mean, max_max, max_min, _, _ = visualize_featmap3d(feat,img, mode='max', save_dir=max_dir)
+                    min_mean, min_max, min_min, _, _ = visualize_featmap3d(feat,img, mode='min', save_dir=min_dir)
+                    # write_info_txt([mean_mean, mean_max, mean_min, max_mean, max_max, max_min, min_mean, min_max, min_min],
+                    #                os.path.join(save_path, 'feat_info.txt'))
+                    max_t = np.argmax(np.max(heatmaps, axis=(1,2,3)))
+                    cv2.imwrite(os.path.join(save_path, 'mean_max_t.png'), mean_overlay_imgs[max_t])
+                    if P <= 100:
+                        explain_info[p]['sample_info'][k]['image'] = mean_overlay_imgs[max_t]
+                    else:
+                        explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'mean_max_t.png')
+                elif modality == 'ctx':
+                    all_img = all_inputs['ctx']
+                    img = copy.deepcopy(all_img[idx_mod].detach().cpu().numpy()) # 3/4 (T) H W
+                    if 'ped_graph' in args.ctx_format:
+                        img = img[:3] # 4 T H W -> 3 T H W
+                    # RGB --> BGR
+                    if args.model_color_order == 'RGB':
+                        img = img[[2,1,0]]
+                    img_mean, img_std = img_mean_std_BGR(args.img_norm_mode)  # BGR
+                    img = recover_norm_imgs(img, img_mean, img_std)  # 3 T H W
+                    img = img.transpose(1,2,3,0).astype(np.int32)  # T H W 3
+                    # 2D case
+                    if 'deeplab' in args.ctx_backbone_name or 'vit' in args.ctx_backbone_name:
+                        img = img[-1:]  # 1 H W 3
+                    # get feature map
+                    feat = copy.deepcopy(all_feat['ctx'][idx_mod].detach().cpu())  # C (T) H W
+                    if len(feat.shape) == 3:
+                        feat = feat.unsqueeze(1)  # C 1 H W
+                    feat = feat.numpy().transpose(1,2,3,0)  # 1 H W C
+                    save_path = os.path.join(save_root, topk_metric, str(p), str(k), 'ctx')
+                    makedir(save_path)
+                    mean_dir = os.path.join(save_path, 'mean')
+                    makedir(mean_dir)
+                    max_dir = os.path.join(save_path, 'max')
+                    makedir(max_dir)
+                    min_dir = os.path.join(save_path, 'min')
+                    makedir(min_dir)
+                    ori_dir = os.path.join(save_path, 'ori')
+                    makedir(ori_dir)
+                    cv2.imwrite(os.path.join(ori_dir, 'ori.png'), img[-1])
+                    mean_mean, mean_max, mean_min, mean_overlay_imgs, heatmaps = visualize_featmap3d(feat,img, mode='mean', save_dir=mean_dir)
+                    max_mean, max_max, max_min, _, _ = visualize_featmap3d(feat,img, mode='max', save_dir=max_dir)
+                    min_mean, min_max, min_min, _, _ = visualize_featmap3d(feat,img, mode='min', save_dir=min_dir)
+                    # write_info_txt([mean_mean, mean_max, mean_min, max_mean, max_max, max_min, min_mean, min_max, min_min],
+                    #                os.path.join(save_path, 'feat_info.txt'))
+                    max_t = np.argmax(np.max(heatmaps, axis=(1,2,3)))
+                    cv2.imwrite(os.path.join(save_path, 'mean_max_t.png'), mean_overlay_imgs[max_t])
+                    if P <= 100:
+                        explain_info[p]['sample_info'][k]['image'] = mean_overlay_imgs[max_t]
+                    else:
+                        explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'mean_max_t.png')
+                elif modality == 'sklt':
+                    traj = copy.deepcopy(all_inputs['traj_ori'][idx_mod].detach().cpu().int().numpy())  # T 4(int)
+                    sklt_coords = copy.deepcopy(all_inputs['sklt'][idx_mod].detach().cpu().numpy())  # 2 T nj
+                    feat = copy.deepcopy(all_feat['sklt'][idx_mod].detach().cpu().numpy())  # obslen*nj
+                    save_path = os.path.join(save_root, topk_metric, str(p), str(k), 'sklt')
+                    makedir(save_path)
+                    if 'coord' in args.sklt_format and 'transformer' in args.sklt_backbone_name:
+                        nd, obslen, nj = sklt_coords.shape
+                        set_id = all_sample_ids['set_id_int'][idx_mod]
+                        vid_id = all_sample_ids['vid_id_int'][idx_mod]
+                        img_nms = all_sample_ids['img_nm_int'][idx_mod]
+                        obj_id = all_sample_ids['ped_id_int'][idx_mod]
+                        dataset_name = all_sample_ids['dataset_name'][idx_mod].detach().item()
+                        dataset_name = ID_TO_DATASET[dataset_name]  # int --> str
+                        # de-normalize
+                        if '0-1' in args.sklt_format:
+                            sklt_coords = recover_norm_sklt(sklt_coords, dataset_name)  # 2 T nj (int)
+                        sklt_coords = sklt_coords.transpose(1,2,0)  # T nj 2
+                        feat = feat.reshape(obslen, nj)  # obslen nj
+                        max_t = np.argmax(np.max(feat, axis=(1,)))
+                        img_path = get_sklt_img_path(dataset_name,
+                                                        set_id=set_id,
+                                                        vid_id=vid_id,
+                                                        obj_id=obj_id,
+                                                        img_nm=img_nms[max_t],
+                                                        with_sklt=True,
+                                                        )
+                        sklt_img = cv2.imread(img_path)[None,:,:,:]  # 1 h w 3
+                        overlay_imgs, heatmaps = visualize_sklt_with_pseudo_heatmap(sklt_img, 
+                                                                                    sklt_coords[max_t:max_t+1],  # 1 nj 2,
+                                                                                    feat[max_t:max_t+1], 
+                                                                                    traj[max_t:max_t+1],  # 1 4, 
+                                                                                    dataset_name, 
+                                                                                    save_path)
+                        cv2.imwrite(os.path.join(save_path, 'max_t.png'), overlay_imgs[0])
+                        if P <= 100:
+                            explain_info[p]['sample_info'][k]['image'] = overlay_imgs[0]
+                        else:
+                            explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'max_t.png')
+
+                elif modality == 'traj':
+                    traj = copy.deepcopy(all_inputs['traj_ori'][idx_mod].detach().cpu().int().numpy())  # obslen 4(int)
+                    feat = copy.deepcopy(all_feat['traj'][idx_mod].detach().cpu().numpy())  # obslen
+                    save_path = os.path.join(save_root, topk_metric, str(p), str(k), 'traj')
+                    makedir(save_path)
+                    if 'transformer' in args.traj_backbone_name:
+                        set_id = all_sample_ids['set_id_int'][idx_mod]
+                        vid_id = all_sample_ids['vid_id_int'][idx_mod]
+                        img_nms = all_sample_ids['img_nm_int'][idx_mod]
+                        obj_id = all_sample_ids['ped_id_int'][idx_mod]
+                        dataset_name = all_sample_ids['dataset_name'][idx_mod].detach().item()
+                        dataset_name = ID_TO_DATASET[dataset_name]  # int --> str
+                        bg_img_path = get_ori_img_path(nm_to_dataset[dataset_name],
                                                     set_id=set_id,
                                                     vid_id=vid_id,
-                                                    obj_id=obj_id,
-                                                    img_nm=img_nms[max_t],
-                                                    with_sklt=True,
+                                                    img_nm=img_nms[-1],
                                                     )
-                    sklt_img = cv2.imread(img_path)[None,:,:,:]  # 1 h w 3
-                    overlay_imgs, heatmaps = visualize_sklt_with_pseudo_heatmap(sklt_img, 
-                                                                                sklt_coords[max_t:max_t+1],  # 1 nj 2,
-                                                                                feat[max_t:max_t+1], 
-                                                                                traj[max_t:max_t+1],  # 1 4, 
-                                                                                dataset_name, 
-                                                                                save_path)
-                    cv2.imwrite(os.path.join(save_path, 'max_t.png'), overlay_imgs[0])
+                        bg_img = cv2.imread(bg_img_path)
+                        bg_blank = np.ones_like(bg_img)*220
+                        traj_img = draw_boxes_on_img(bg_img, traj)
+                        blank_traj_img = draw_boxes_on_img(bg_blank, traj)
+                        cv2.imwrite(filename=os.path.join(save_path, 'traj.png'), 
+                                    img=traj_img)
+                        cv2.imwrite(filename=os.path.join(save_path, 'traj_blank_bg.png'), 
+                                    img=blank_traj_img)
+                        if P <= 100:
+                            explain_info[p]['sample_info'][k]['image'] = blank_traj_img
+                        else:
+                            explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'traj_blank_bg.png')
+                            
+                elif modality == 'ego':
+                    save_path = os.path.join(save_root, topk_metric, str(p), str(k), 'ego')
+                    makedir(save_path)
+                    ego = all_inputs['ego'][idx_mod].detach().cpu().numpy()
+                    max_ego = all_inputs['ego'].max().item()
+                    min_ego = all_inputs['ego'].min().item()
+                    lim = (min_ego, max_ego)
+                    feat = copy.deepcopy(all_feat['ego'][idx_mod].detach().cpu().numpy())
+                    ego_img = vis_1d_seq(ego, lim, save_path, weights=None)
+                    cv2.imwrite(os.path.join(save_path, 'ego.png'), ego_img)
                     if P <= 100:
-                        explain_info[p]['sample_info'][k]['image'] = overlay_imgs[0]
+                        explain_info[p]['sample_info'][k]['image'] = ego_img
                     else:
-                        explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'max_t.png')
-
-            elif modality == 'traj':
-                traj = copy.deepcopy(all_inputs['traj_ori'][idx_mod].detach().cpu().int().numpy())  # obslen 4(int)
-                feat = copy.deepcopy(all_feat['traj'][idx_mod].detach().cpu().numpy())  # obslen
-                save_path = os.path.join(save_root, str(p), str(k), 'traj')
-                makedir(save_path)
-                if 'transformer' in args.traj_backbone_name:
+                        explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'ego.png')
+                elif modality == 'social':
+                    save_path = os.path.join(save_root, topk_metric, str(p), str(k), 'social')
+                    makedir(save_path)
+                    neighbor_bbox = all_inputs['obs_neighbor_bbox'][idx_mod].detach().cpu().int().numpy() # n_neighbor T 4(int)
+                    traj = copy.deepcopy(all_inputs['traj_ori'][idx_mod].detach().cpu().int().numpy())  # obslen 4(int)
+                    weights = copy.deepcopy(all_feat['social'][idx_mod].detach().cpu().numpy())  # obslen*n_neighbor
+                    n_neighbor, obslen, _ = neighbor_bbox.shape
+                    if args.social_format == 'rel_loc':
+                        weights = weights.reshape(obslen, n_neighbor)  # obslen n_neighbor
+                    elif args.social_format == 'ori_traj':
+                        weights = weights.reshape(obslen, n_neighbor+1)  # obslen n_neighbor+1
+                        weights = weights[:,1:] # obslen n_neighbor
                     set_id = all_sample_ids['set_id_int'][idx_mod]
                     vid_id = all_sample_ids['vid_id_int'][idx_mod]
                     img_nms = all_sample_ids['img_nm_int'][idx_mod]
@@ -365,66 +419,17 @@ def select_topk_no_fusion(args,
                                                 img_nm=img_nms[-1],
                                                 )
                     bg_img = cv2.imread(bg_img_path)
-                    bg_blank = np.ones_like(bg_img)*220
-                    traj_img = draw_boxes_on_img(bg_img, traj)
-                    blank_traj_img = draw_boxes_on_img(bg_blank, traj)
-                    cv2.imwrite(filename=os.path.join(save_path, 'traj.png'), 
-                                img=traj_img)
-                    cv2.imwrite(filename=os.path.join(save_path, 'traj_blank_bg.png'), 
-                                img=blank_traj_img)
+                    social_img = visualize_neighbor_bbox(bg_img,traj[-1],neighbor_bbox[:,-1],weights=weights[-1])
+                    cv2.imwrite(filename=os.path.join(save_path, 'social.png'), 
+                                    img=social_img)
                     if P <= 100:
-                        explain_info[p]['sample_info'][k]['image'] = blank_traj_img
+                        explain_info[p]['sample_info'][k]['image'] = social_img
                     else:
-                        explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'traj_blank_bg.png')
-                        
-            elif modality == 'ego':
-                save_path = os.path.join(save_root, str(p), str(k), 'ego')
-                makedir(save_path)
-                ego = all_inputs['ego'][idx_mod].detach().cpu().numpy()
-                max_ego = all_inputs['ego'].max().item()
-                min_ego = all_inputs['ego'].min().item()
-                lim = (min_ego, max_ego)
-                feat = copy.deepcopy(all_feat['ego'][idx_mod].detach().cpu().numpy())
-                ego_img = vis_1d_seq(ego, lim, save_path, weights=None)
-                cv2.imwrite(os.path.join(save_path, 'ego.png'), ego_img)
-                if P <= 100:
-                    explain_info[p]['sample_info'][k]['image'] = ego_img
-                else:
-                    explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'ego.png')
-            elif modality == 'social':
-                save_path = os.path.join(save_root, str(p), str(k), 'social')
-                makedir(save_path)
-                neighbor_bbox = all_inputs['obs_neighbor_bbox'][idx_mod].detach().cpu().int().numpy() # n_neighbor T 4(int)
-                traj = copy.deepcopy(all_inputs['traj_ori'][idx_mod].detach().cpu().int().numpy())  # obslen 4(int)
-                weights = copy.deepcopy(all_feat['social'][idx_mod].detach().cpu().numpy())  # obslen*n_neighbor
-                n_neighbor, obslen, _ = neighbor_bbox.shape
-                if args.social_format == 'rel_loc':
-                    weights = weights.reshape(obslen, n_neighbor)  # obslen n_neighbor
-                elif args.social_format == 'ori_traj':
-                    weights = weights.reshape(obslen, n_neighbor+1)  # obslen n_neighbor+1
-                    weights = weights[:,1:] # obslen n_neighbor
-                set_id = all_sample_ids['set_id_int'][idx_mod]
-                vid_id = all_sample_ids['vid_id_int'][idx_mod]
-                img_nms = all_sample_ids['img_nm_int'][idx_mod]
-                obj_id = all_sample_ids['ped_id_int'][idx_mod]
-                dataset_name = all_sample_ids['dataset_name'][idx_mod].detach().item()
-                dataset_name = ID_TO_DATASET[dataset_name]  # int --> str
-                bg_img_path = get_ori_img_path(nm_to_dataset[dataset_name],
-                                            set_id=set_id,
-                                            vid_id=vid_id,
-                                            img_nm=img_nms[-1],
-                                            )
-                bg_img = cv2.imread(bg_img_path)
-                social_img = visualize_neighbor_bbox(bg_img,traj[-1],neighbor_bbox[:,-1],weights=weights[-1])
-                cv2.imwrite(filename=os.path.join(save_path, 'social.png'), 
-                                img=social_img)
-                if P <= 100:
-                    explain_info[p]['sample_info'][k]['image'] = social_img
-                else:
-                    explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'social.png')
+                        explain_info[p]['sample_info'][k]['image'] = os.path.join(save_path, 'social.png')
 
-    log(f'Plotting all explanation in {save_root}')
-    plot_all_explanation_no_fusion(explain_info, os.path.join(save_root, 'all_explanation.png'))
+        plot_path = os.path.join(save_root, f'all_explanation_topk_{topk_metric}.png', )
+        log(f'Plotting all explanation in {plot_path}')
+        plot_all_explanation_no_fusion(explain_info, plot_path)
 
 
 def plot_all_explanation_no_fusion(explain_info, 

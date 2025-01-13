@@ -8,6 +8,7 @@ import argparse
 import os
 import pickle
 
+from get_args import get_args, process_args
 from tools.utils import makedir, write_info_txt
 from main import construct_data_loader, construct_model
 from tools.log import create_logger
@@ -20,18 +21,25 @@ from customize_proto import customize_proto
 def explain_spec_ckpt():
     parser = argparse.ArgumentParser(description='explain args')
     parser.add_argument('--args_path', type=str, 
-                        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp434/args.pkl')
+        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp522/args.pkl')
     parser.add_argument('--ckpt_path', type=str, 
-                        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp434/ckpt/28_0.0000.pth')
+        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp522/ckpt/2_0.0000.pth')
     parser.add_argument('--proto_value_to_rank', type=str, default='sparsity')
     parser.add_argument('--proto_rank_criteria', type=str, default='num_select')
     parser.add_argument('--proto_num_select', type=int, default=5)
     parser.add_argument('--do_explain', type=int, default=1)
-    explain_args = parser.parse_args()
+    explain_args = parser.parse_args([])
 
     # load args
+    init_args = get_args()
+    init_args = process_args(init_args)
+    init_args_dict = vars(init_args)
     with open(explain_args.args_path, 'rb') as f:
         args = pickle.load(f)
+    args_dict = vars(args)
+    extra_args = {key: init_args_dict[key] for key in init_args_dict if key not in args_dict}
+    args_dict.update(extra_args)
+    args = argparse.Namespace(**args_dict)
     args.test_customized_proto = True
     args.proto_value_to_rank = explain_args.proto_value_to_rank
     args.proto_rank_criteria = explain_args.proto_rank_criteria

@@ -91,13 +91,14 @@ class ToyDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.samples)
 
+
 if __name__ == '__main__':
     seed_all(42)
-    parser = argparse.ArgumentParser(description='main')
-    parser.add_argument('--a', type=str, default='a')
-    parser.add_argument('--b', type=int, default=0)
+    # parser = argparse.ArgumentParser(description='main')
+    # parser.add_argument('--a', type=str, default='a')
+    # parser.add_argument('--b', type=int, default=0)
 
-    args = parser.parse_args()
+    # args = parser.parse_args()
     
     # args = get_args()
     # dataset = TITAN_dataset(sub_set='default_train', 
@@ -122,15 +123,8 @@ if __name__ == '__main__':
     #                             ego_format=args.ego_format,
     #                             augment_mode=args.augment_mode,
     #                             )
-    x = torch.tensor([[1,2,3,4],[5,6,7,8],[9,10,11,12]]).float()
-    class MyModel(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.model = nn.Linear(4, 2)
-        def forward(self, x, is_train):
-            print(f'is_train: {is_train}')
-            return self.model(x)
-    model = MyModel()
-    model_p = nn.DataParallel(model).float().to('cuda:0')
-    y = model_p(x, is_train=True)
-    print(y)
+    # Sample args1 and args2 creation
+
+    path668 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp668/ckpt/2_0.0000.pth'
+    path515 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp515/ckpt/12_0.0000.pth'
+    
