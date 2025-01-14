@@ -29,7 +29,7 @@ from tools.visualize.visualize_neighbor_bbox import visualize_neighbor_bbox
 from tools.visualize.visualize_skeleton import visualize_sklt_with_pseudo_heatmap
 from tools.data.normalize import recover_norm_imgs, img_mean_std_BGR, recover_norm_sklt, recover_norm_bbox
 from tools.data.resize_img import resize_image
-from get_args import get_args
+from get_args import get_args, process_args
 
 torch.backends.mha.set_fastpath_enabled(False)
 
@@ -125,6 +125,14 @@ if __name__ == '__main__':
     #                             )
     # Sample args1 and args2 creation
 
-    path668 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp668/ckpt/2_0.0000.pth'
-    path515 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp515/ckpt/12_0.0000.pth'
-    
+    model668 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp668/ckpt/2_0.0000.pth'
+    model515 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp515/ckpt/12_0.0000.pth'
+    args668 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp668/args.pkl'
+    args515 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp515/args.pkl'
+    with open(args668, 'rb') as f:
+        args668 = pickle.load(f)
+    with open(args515, 'rb') as f:
+        args515 = pickle.load(f)
+    init_args = get_args()
+    init_args = process_args(init_args)
+    init_args_dict = vars(init_args)

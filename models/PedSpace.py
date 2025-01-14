@@ -243,6 +243,10 @@ class SingleBranch(nn.Module):
             if self.proj_actv is not None:
                 self.proj_layers.append(ACTIVATION_FUNC[self.proj_actv]())
             in_dim = self.proj_dim
+        if self.proj_norm == 'ln':
+            self.proj_layers.append(nn.LayerNorm(self.proj_dim))
+        elif self.proj_norm == 'bn':
+            self.proj_layers.append(nn.BatchNorm1d(self.proj_dim))
         self.proj_layers.append(nn.Linear(in_dim, self.proj_dim, bias=self.proj_bias))
         self.proj_layers = nn.Sequential(*self.proj_layers)
 

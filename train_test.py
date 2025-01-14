@@ -300,7 +300,7 @@ def train_test_epoch(args,
                 if loss_params['diversity_loss_eff'] > 0:
                     diversity_loss = calc_diversity_loss(model.module.proto_enc.weight)
                     total_diversity_loss += diversity_loss.item()
-                    if args.trainable_eff:
+                    if args.trainable_eff>1:
                         log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
                         loss = loss + 0.5/torch.exp(log_sig_sq)*diversity_loss + 0.5*log_sig_sq
                         loss_eff_dict['diversity_loss_eff'] = loss_eff_idx
@@ -310,7 +310,7 @@ def train_test_epoch(args,
                 if loss_params['mono_sem_eff'] > 0:
                     mono_sem_loss = -batch_sparsity.mean()
                     total_mono_sem_loss += mono_sem_loss.item()
-                    if args.trainable_eff:
+                    if args.trainable_eff>1:
                         log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
                         loss = loss + 0.5/torch.exp(log_sig_sq)*mono_sem_loss + 0.5*log_sig_sq
                         loss_eff_dict['mono_sem_eff'] = loss_eff_idx
@@ -320,7 +320,7 @@ def train_test_epoch(args,
                 if loss_params['mono_sem_l1_eff'] > 0:
                     mono_sem_l1_loss = batch_sparsity.abs().mean()
                     total_mono_sem_l1_loss += mono_sem_l1_loss.item()
-                    if args.trainable_eff:
+                    if args.trainable_eff>1:
                         log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
                         loss = loss + 0.5/torch.exp(log_sig_sq)*mono_sem_l1_loss + 0.5*log_sig_sq
                         loss_eff_dict['mono_sem_l1_eff'] = loss_eff_idx
@@ -335,7 +335,7 @@ def train_test_epoch(args,
                                                                         batch_sparsity,
                                                                         loss_params['mono_sem_align_func'])
                     total_mono_sem_align_loss += mono_sem_align_loss.item()
-                    if args.trainable_eff:
+                    if args.trainable_eff>1:
                         log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
                         loss = loss + 0.5/torch.exp(log_sig_sq)* mono_sem_align_loss + 0.5*log_sig_sq
                         loss_eff_dict['mono_sem_align_eff'] = loss_eff_idx
@@ -349,7 +349,7 @@ def train_test_epoch(args,
                                                                 pair_mode='pair_wise')
                     cluster_loss = calc_contrast_loss(modality_simi_mats,
                                                        pair_mode='pair_wise')
-                    if args.trainable_eff:
+                    if args.trainable_eff>1:
                         log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
                         loss = loss + 0.5/torch.exp(log_sig_sq)* cluster_loss + 0.5*log_sig_sq
                         loss_eff_dict['cluster_loss_eff'] = loss_eff_idx
