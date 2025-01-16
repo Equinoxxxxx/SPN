@@ -366,8 +366,7 @@ def train_test_epoch(args,
                 optimizer.step()
                 if isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
                     scheduler.step()
-        if is_train and scheduler and not isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
-            scheduler.step()
+        
         # display
         data_prepare_time = b_start - b_end
         b_end = time.time()
@@ -391,7 +390,8 @@ def train_test_epoch(args,
         torch.cuda.empty_cache()
         if n_iter%50 == 0:
             print(f'cur mem allocated: {torch.cuda.memory_allocated(device)}')
-
+    if is_train and scheduler and not isinstance(scheduler, torch.optim.lr_scheduler.OneCycleLR):
+        scheduler.step()
     # calc epoch wise metric
     # all sparsity
     if args.model_name == 'pedspace':
