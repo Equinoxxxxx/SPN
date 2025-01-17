@@ -383,6 +383,29 @@ def construct_optimizer_scheduler(args, model, train_loaders):
                 raise NotImplementedError(args.scheduler_type2)
     return [optimizer1, optimizer2], [lr_scheduler1, lr_scheduler2]
 
+def avg_test_res(all_test_res):
+    '''
+    cur_epoch_all_test_res: {dataset_name: {'cls':{
+                                                act_set: {metric: res}}
+                                            'traj_mse': res,
+                                            ...}}
+    '''
+    dnms = list(all_test_res.keys())
+    avg_res = {}
+    if 'cls' in all_test_res[dnms[0]]:
+        avg_res['cls'] = {}
+        for act_set in all_test_res[dnms[0]]['cls']:
+            avg_res['cls'][act_set] = {}
+            for metric in all_test_res[dnms[0]]['cls'][act_set]:
+                avg_res['cls'][act_set][metric] = \
+                    sum([all_test_res[d]['cls'][act_set][metric] for d in all_test_res]) \
+                    / len(all_test_res)
+    for metric in all_test_res[dnms[0]]:
+        if metric == 'cls':
+            continue
+        avg_res[metric] = sum([all_test_res[d][metric] for d in all_test_res]) \
+            / len(all_test_res)
+    return avg_res
 
 def update_best_res(best_val_res,
                     best_test_res,
@@ -698,7 +721,7 @@ def main(rank, world_size, args):
             # update best sparsity
             val_sparsity = sum([curve_dict[d]['val']['all_sparsity'][-1] for d in args.test_dataset_names[0]]) \
                 / len(args.test_dataset_names[0])
-            if args.model_name == 'pedspace' and train_res['all_sparsity'] > best_train_sparse_e:
+            if args.model_name == 'pedspace' and train_res['all_sparsity'] > best_train_sparsity:
                 best_train_sparsity = train_res['all_sparsity']
                 best_train_sparse_e = e
                 best_train_sparse_e_res[0] = cur_epoch_all_test_res[0]
@@ -718,6 +741,8 @@ def main(rank, world_size, args):
             log(f'bset train sparsity e test res: {best_train_spar_test_res}')
             log(f'bset val sparsity epoch: {best_val_sparse_e}  {best_val_sparsity}')
             log(f'bset val sparsity e test res: {best_val_spar_test_res}')
+            cur_e_avg_test_res = avg_test_res(cur_epoch_all_test_res[0])
+            log(f'current epoch avg test results: {cur_e_avg_test_res}')
         if e%args.explain_every == 0 and args.model_name == 'pedspace':
             log('Selecting topk samples')
             save_root = os.path.join(exp_dir, 'explain', 'stage1_e'+str(e))
@@ -935,7 +960,7 @@ def main(rank, world_size, args):
             # update best sparsity
             val_sparsity = sum([curve_dict[d]['val']['all_sparsity'][-1] for d in args.test_dataset_names[1]]) \
                 / len(args.test_dataset_names[1])
-            if args.model_name == 'pedspace' and train_res['all_sparsity'] > best_train_sparse_e:
+            if args.model_name == 'pedspace' and train_res['all_sparsity'] > best_train_sparsity:
                 best_train_sparsity = train_res['all_sparsity']
                 best_train_sparse_e = e
                 best_train_sparse_e_res[1] = cur_epoch_all_test_res[1]
@@ -955,6 +980,8 @@ def main(rank, world_size, args):
             log(f'bset train sparsity e test res: {best_train_spar_test_res}')
             log(f'bset val sparsity epoch: {best_val_sparse_e}  {best_val_sparsity}')
             log(f'bset val sparsity e test res: {best_val_spar_test_res}')
+            cur_e_avg_test_res = avg_test_res(cur_epoch_all_test_res[1])
+            log(f'current epoch avg test results: {cur_e_avg_test_res}')
         # explain
         if e%args.explain_every == 0 and args.model_name == 'pedspace':
             save_root = os.path.join(exp_dir, 'explain', 'stage2_e'+str(e))

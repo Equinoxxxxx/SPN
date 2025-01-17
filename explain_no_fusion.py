@@ -201,7 +201,7 @@ def select_topk_no_fusion(args,
         for p in tbar:
             last_weights_cur_proto = {act:model_parallel.module.proto_dec[act].weight[:,p].detach().cpu().numpy() \
                                     for act in model_parallel.module.proto_dec.keys()}
-            cur_p_rel_var = top_k_relative_var[:,p].mean().cpu().numpy()
+            cur_p_rel_var = top_k_relative_var[:args.topk, p].mean().cpu().numpy()
             explain_info.append({'mean_rel_var':cur_p_rel_var,
                                 'last_weights':last_weights_cur_proto,
                                 'proto_id':p,
