@@ -97,7 +97,7 @@ def get_args():
     parser.add_argument('--n_pred_sampling', type=int, default=5)
     # explain
     parser.add_argument('--topk_metric_explain', type=str, default='activation')
-    parser.add_argument('--topk_explain', type=int, default=6)
+    parser.add_argument('--topk_explain', type=int, default=8)
     parser.add_argument('--head_fusion', type=str, default='mean')
     parser.add_argument('--test_customized_proto', type=int, default=1)
     parser.add_argument('--proto_rank_criteria', type=str, default='num_select')

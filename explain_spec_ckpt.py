@@ -21,9 +21,10 @@ from customize_proto import customize_proto
 def explain_spec_ckpt():
     parser = argparse.ArgumentParser(description='explain args')
     parser.add_argument('--args_path', type=str, 
-        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp522/args.pkl')
+        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp708/args.pkl'
+        )
     parser.add_argument('--ckpt_path', type=str, 
-        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp522/ckpt/2_0.0000.pth')
+        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp708/ckpt/2_0.0000.pth')
     parser.add_argument('--proto_value_to_rank', type=str, default='sparsity')
     parser.add_argument('--proto_rank_criteria', type=str, default='num_select')
     parser.add_argument('--proto_num_select', type=int, default=5)

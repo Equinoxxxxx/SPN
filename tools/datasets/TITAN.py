@@ -626,6 +626,7 @@ class TITAN_dataset(Dataset):
                   'obs_bboxes_unnormed': obs_bbox,
                   'obs_bboxes_ori': obs_bbox_ori,
                   'obs_ego': obs_ego,
+                  'obs_ego_speed': torch.zeros(obs_ego.shape).float(),
                   'pred_act': target,
                   'pred_bboxes': pred_bbox_offset,
                   'pred_bboxes_ori': pred_bbox_ori,

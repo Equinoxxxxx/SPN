@@ -119,7 +119,8 @@ def train_test_epoch(args,
         targets['transporting'] = data['transporting'].to(device).view(-1)
         targets['age'] = data['age'].to(device).view(-1)
         targets['pred_traj'] = data['pred_bboxes'].to(device)  # B predlen 4
-        targets['pred_sklt'] = data['pred_skeletons'].to(device)  # B ndim predlen nj
+        if 'sklt' in modalities:
+            targets['pred_sklt'] = data['pred_skeletons'].to(device)  # B ndim predlen nj
 
         # forward
         b_start = time.time()
@@ -220,7 +221,7 @@ def train_test_epoch(args,
                 loss_eff_dict = {}
                 loss_eff_idx = 0
                 # pose loss
-                if loss_params['pose_mse_eff'] > 0:
+                if loss_params['pose_mse_eff']>0 and model.module.do_pred_pose:
                     pose_loss = out['pose_loss'].mean()
                     total_pose_loss += pose_loss.item()
                     if args.trainable_eff:
@@ -242,7 +243,7 @@ def train_test_epoch(args,
                                                 gt_pose,  # B predlen nj ndim
                                                 loss_params['stoch_mse_type'])
                     total_pose_mse += pose_mse.mean().item()
-                if loss_params['mse_eff'] > 0:
+                if loss_params['mse_eff']>0 and model.module.do_pred_traj:
                     traj_loss = out['traj_loss'].mean()
                     total_traj_loss += traj_loss.item()
                     if args.trainable_eff:
@@ -342,13 +343,16 @@ def train_test_epoch(args,
                         loss_eff_idx += 1
                     else:
                         loss = loss + mono_sem_align_loss * loss_params['mono_sem_align_eff']
-                if loss_params['cluster_loss_eff'] > 0:
+                if loss_params['cluster_loss_eff']>0 and len(modalities)>1:
                     modality_simi_mats = calc_batch_simi_simple(feat_dict=out['enc_out'],
                                                                 log_logit_scale=model.module.logit_scale,
                                                                 simi_func='dot_prod',
                                                                 pair_mode='pair_wise')
-                    cluster_loss = calc_contrast_loss(modality_simi_mats,
+                    try:
+                        cluster_loss = calc_contrast_loss(modality_simi_mats,
                                                        pair_mode='pair_wise')
+                    except:
+                        import pdb; pdb.set_trace()
                     if args.trainable_eff>1:
                         log_sig_sq = model.module.loss_eff[stage, loss_eff_idx]
                         loss = loss + 0.5/torch.exp(log_sig_sq)* cluster_loss + 0.5*log_sig_sq

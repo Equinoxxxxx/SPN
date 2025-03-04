@@ -328,6 +328,12 @@ class PIEDataset(Dataset):
         obs_ego = \
             torch.tensor(self.samples['obs_ego'][idx]).float().reshape(-1, 1)
         assert len(obs_ego.shape) == 2, obs_ego.shape
+        if self.dataset_name == 'PIE':
+            obs_ego_speed = \
+                torch.tensor(self.samples['obs_ego_speed'][idx]).float().reshape(-1, 1)
+        else:
+            obs_ego_speed = torch.zeros(obs_ego.shape).float()
+        assert obs_ego_speed.shape == obs_ego.shape, (obs_ego_speed.shape, obs_ego.shape)
         set_id_int = self.samples['obs_set_id_int'][idx][-1] if self.dataset_name == 'PIE' else 0
 
         # obs_ego = torch.cat([obs_ego, torch.zeros(obs_ego.size())], dim=-1)
@@ -349,6 +355,7 @@ class PIEDataset(Dataset):
                 'obs_bboxes_unnormed': obs_bbox,
                 'obs_bboxes_ori': obs_bbox_ori,
                 'obs_ego': obs_ego,  # shape: obs len, 1
+                'obs_ego_speed': obs_ego_speed,  # shape: obs len, 1
                 'pred_act': target,   # int
                 'pred_bboxes': pred_bbox_offset,   # shape: [pred_len, 4]
                 'pred_bboxes_unnormed': pred_bbox,
@@ -1168,6 +1175,7 @@ class PIEDataset(Dataset):
                     'obs_pid': obs_slices['ped_id'],
                     'obs_occ': obs_slices['occlusion'],
                     'obs_ego': obs_slices[self.ego_motion_key],
+                    'obs_ego_speed': obs_slices['obd_speed'],
                     'pred_image_paths': pred_slices['image'],
                     'pred_bbox_normed': pred_bbox_normed,
                     'pred_bbox': pred_slices['bbox'],

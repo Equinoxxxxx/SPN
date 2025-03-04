@@ -14,7 +14,7 @@ from tools.data.normalize import recover_norm_imgs, img_mean_std_BGR, recover_no
 from tools.visualize.heatmap import visualize_featmap3d
 from tools.visualize.visualize_skeleton import visualize_sklt_with_pseudo_heatmap
 from tools.visualize.visualize_bbox import draw_boxes_on_img
-from tools.visualize.visualize_1d_seq import vis_1d_seq
+from tools.visualize.visualize_1d_seq import vis_1d_seq, vis_2_1d_seqs
 from tools.visualize.visualize_neighbor_bbox import visualize_neighbor_bbox
 from tools.data.resize_img import resize_image
 
@@ -37,18 +37,18 @@ def forwad_pass_no_fusion(dataloader,
         for n_iter, data in enumerate(tbar):
             # load inputs
             inputs = {}
+            inputs['traj'] = data['obs_bboxes'].to(device)  # B T 4
+            inputs['traj_unnormed'] = data['obs_bboxes_unnormed'].to(device)  # B T 4
+            inputs['traj_ori'] = data['obs_bboxes_ori'].to(device)  # B T 4
             if 'img' in modalities:
                 inputs['img'] = data['ped_imgs'].to(device)  # B 3 T H W
             if 'sklt' in modalities:
                 inputs['sklt'] = data['obs_skeletons'].to(device)  # B 2 T nj
             if 'ctx' in modalities:
                 inputs['ctx'] = data['obs_context'].to(device)
-            if 'traj' in modalities:
-                inputs['traj'] = data['obs_bboxes'].to(device)  # B T 4
-                inputs['traj_unnormed'] = data['obs_bboxes_unnormed'].to(device)  # B T 4
-                inputs['traj_ori'] = data['obs_bboxes_ori'].to(device)  # B T 4
             if 'ego' in modalities:
                 inputs['ego'] = data['obs_ego'].to(device)  # B T 1
+                inputs['ego_speed'] = data['obs_ego_speed'].to(device)  # B T 1
             if 'social' in modalities:
                 inputs['social'] = data['obs_neighbor_relation'].to(device)
                 inputs['obs_neighbor_bbox'] = data['obs_neighbor_bbox'].to(device)
@@ -63,12 +63,20 @@ def forwad_pass_no_fusion(dataloader,
             targets['transporting'] = data['transporting'].to(device).view(-1)
             targets['age'] = data['age'].to(device).view(-1)
             targets['pred_traj'] = data['pred_bboxes'].to(device)  # B T 4
-            targets['pred_sklt'] = data['pred_skeletons'].to(device)  # B ndim predlen nj
+            if 'sklt' in modalities:
+                targets['pred_sklt'] = data['pred_skeletons'].to(device)  # B ndim predlen nj
             # other info
             info = {}
             for k in data.keys():
-                if k not in ['ped_imgs', 'obs_skeletons', 'obs_context', 'obs_bboxes', 'obs_ego', 'obs_neighbor_relation',
-                             'pred_act', 'atomic_actions', 'complex_context', 'communicative', 'transporting', 'age',
+                if k not in ['ped_imgs', 
+                             'obs_skeletons', 
+                             'obs_context', 
+                             'obs_bboxes', 
+                             'obs_ego', 'obs_ego_speed', 
+                             'obs_neighbor_relation',
+                             'pred_act', 
+                             'atomic_actions', 'complex_context', 'communicative', 'transporting', 
+                             'age',
                              'pred_bboxes', 'pred_skeletons']:
                     info[k] = data[k]
             # forward
@@ -136,8 +144,10 @@ def select_topk_no_fusion(args,
     N = all_inputs[list(all_inputs.keys())[0]].shape[0]
     # act cls
     all_act_cls = {k:[] for k in all_targets_batches[0].keys()}
-    all_act_cls.pop('pred_traj')
-    all_act_cls.pop('pred_sklt')
+    if 'pred_sklt' in all_act_cls.keys():
+        all_act_cls.pop('pred_sklt')
+    if 'pred_traj' in all_act_cls.keys():
+        all_act_cls.pop('pred_traj')
     for target in all_targets_batches:
         for k in all_act_cls.keys():
             all_act_cls[k].append(copy.deepcopy(target[k]))
@@ -384,13 +394,31 @@ def select_topk_no_fusion(args,
                 elif modality == 'ego':
                     save_path = os.path.join(save_root, topk_metric, str(p), str(k), 'ego')
                     makedir(save_path)
-                    ego = all_inputs['ego'][idx_mod].detach().cpu().numpy()
+                    ego = all_inputs['ego'][idx_mod].detach().cpu().numpy() # obslen 1
                     max_ego = all_inputs['ego'].max().item()
                     min_ego = all_inputs['ego'].min().item()
                     lim = (min_ego, max_ego)
                     feat = copy.deepcopy(all_feat['ego'][idx_mod].detach().cpu().numpy())
-                    ego_img = vis_1d_seq(ego, lim, save_path, weights=None)
-                    cv2.imwrite(os.path.join(save_path, 'ego.png'), ego_img)
+                    ego_img = vis_1d_seq(ego, 
+                                        lim, 
+                                        save_path=os.path.join(save_path, 
+                                                               'ego.png'), 
+                                        weights=None)
+                    dataset_id = all_sample_ids['dataset_name'][idx_mod].detach().item()
+                    if dataset_id == 0:
+                        tags = ['acceleration', 'velocity']
+                        ego_speed = all_inputs['ego_speed'][idx_mod].detach().cpu().numpy() # obslen 1
+                        max_speed = all_inputs['ego_speed'].max().item()
+                        min_speed = all_inputs['ego_speed'].min().item()
+                        lims = [lim, (min_speed, max_speed)]
+                        seqs = [ego, ego_speed]
+                        ego_img = vis_2_1d_seqs(seqs, 
+                                                tags, 
+                                                lims, 
+                                                save_path=os.path.join(save_path, 
+                                                                    'accel_vel.png'), 
+                                                weights=None)
+                # cv2.imwrite(os.path.join(save_path, 'ego.png'), ego_img)
                     if P <= 100:
                         explain_info[p]['sample_info'][k]['image'] = ego_img
                     else:

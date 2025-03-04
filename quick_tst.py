@@ -125,14 +125,10 @@ if __name__ == '__main__':
     #                             )
     # Sample args1 and args2 creation
 
-    model668 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp668/ckpt/2_0.0000.pth'
-    model515 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp515/ckpt/12_0.0000.pth'
-    args668 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp668/args.pkl'
-    args515 = '/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp515/args.pkl'
-    with open(args668, 'rb') as f:
-        args668 = pickle.load(f)
-    with open(args515, 'rb') as f:
-        args515 = pickle.load(f)
-    init_args = get_args()
-    init_args = process_args(init_args)
-    init_args_dict = vars(init_args)
+    from tools.visualize.visualize_1d_seq import vis_2_1d_seqs
+    acceleration = torch.rand(4, 1)
+    velocity = torch.rand(4, 1)
+    seqs = [acceleration, velocity]
+    tags = ['Acceleration (m/s²)', 'Velocity (m/s)']
+    lims = [(-1, 1), (-2, 2)]
+    img = vis_2_1d_seqs(seqs, tags, lims, 'test_output/vis1dseqs.png', weights=None, mode='below')

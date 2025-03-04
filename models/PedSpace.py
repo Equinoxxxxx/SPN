@@ -42,9 +42,9 @@ class PedSpace(nn.Module):
         self.pose_dec_name = args.pose_dec_name
         self.do_pred_traj = False
         self.do_pred_pose = False
-        if args.mse_eff1 > 0 or args.mse_eff2 > 0:
+        if (args.mse_eff1 > 0 or args.mse_eff2 > 0) and 'traj' in self.modalities:
             self.do_pred_traj = True
-        if args.pose_mse_eff1 > 0 or args.pose_mse_eff2 > 0:
+        if (args.pose_mse_eff1 > 0 or args.pose_mse_eff2 > 0) and 'sklt' in self.modalities:
             self.do_pred_pose = True
         self.logit_scale = nn.parameter.Parameter(
             torch.ones([]) * np.log(1 / 0.07))
@@ -109,7 +109,7 @@ class PedSpace(nn.Module):
             else:
                 raise ValueError(self.pose_dec_name)
     
-    def forward(self, batch, is_train=1):
+    def forward(self, batch, is_train=1, mask=None):
         # import pdb; pdb.set_trace()
         inputs, targets = batch
         feat = {}
@@ -145,6 +145,8 @@ class PedSpace(nn.Module):
         proto_simi = self.proto_enc(feat_fused)  # B n_proto
         if not self.linear_proto_enc:
             proto_simi = self.proto_enc_actv(proto_simi)
+        if mask is not None:
+            proto_simi = proto_simi * mask
         # mm proto_simi
         mm_proto_simi = None
         if self.mm_fusion_mode == 'no_fusion':
