@@ -61,7 +61,7 @@ def vis_1d_seq(seq, lim, path, weights=None, mode='below'):
         ax.imshow(colored_weights, aspect='auto', extent=extent, alpha=0.5)
     
     ax.plot(seq, color='r', linewidth=2)
-    # ax.set_ylim(lim)
+    ax.set_ylim(lim)
     ax.axhline(0, color='black', linewidth=.5)
     
     if weights is not None and mode == 'below':
@@ -121,7 +121,7 @@ def vis_2_1d_seqs(seqs, tags, lims, path, weights=None, mode='below'):
     # Plot first sequence on the left y-axis
     ax_left = ax_main
     ax_left.plot(seqs[0], color=colors[0], linewidth=2, label=tags[0])
-    # ax_left.set_ylim(lims[0])
+    ax_left.set_ylim(lims[0])
     ax_left.set_ylabel(tags[0], color=colors[0])
     ax_left.tick_params(axis='y', labelcolor=colors[0])
     
@@ -129,7 +129,7 @@ def vis_2_1d_seqs(seqs, tags, lims, path, weights=None, mode='below'):
         # Plot second sequence on the right y-axis
         ax_right = ax_main.twinx()
         ax_right.plot(seqs[1], color=colors[1], linewidth=2, label=tags[1])
-        # ax_right.set_ylim(lims[1])
+        ax_right.set_ylim(lims[1])
         ax_right.set_ylabel(tags[1], color=colors[1])
         ax_right.tick_params(axis='y', labelcolor=colors[1])
     

@@ -404,7 +404,7 @@ def select_topk_no_fusion(args,
                                         save_path=os.path.join(save_path, 
                                                                'ego.png'), 
                                         weights=None)
-                    dataset_id = all_sample_ids['dataset_name'][idx_mod].detach().item()
+                    dataset_id = all_sample_ids['dataset_name'][idx_mod].int().detach().item()
                     if dataset_id == 0:
                         tags = ['acceleration', 'velocity']
                         ego_speed = all_inputs['ego_speed'][idx_mod].detach().cpu().numpy() # obslen 1
