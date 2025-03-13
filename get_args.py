@@ -32,7 +32,6 @@ def get_args():
     parser.add_argument('--reg_first', type=int, default=1)
     parser.add_argument('--epochs1', type=int, default=50)
     parser.add_argument('--epochs2', type=int, default=0)
-    parser.add_argument('--warm_step1', type=int, default=1)
     parser.add_argument('--batch_size1', type=int, default=64)
     parser.add_argument('--batch_size2', type=int, default=64)
     parser.add_argument('--test_every', type=int, default=2)
@@ -211,6 +210,17 @@ def process_args(args):
         args.pose_mse_eff1 = 1
         args.batch_size1 = 32
         args.key_metric = 'pose_mse'
+    elif args.model_name == 'SLENN':
+        args.epochs2 = 0
+        args.modalities = ['img', 'sklt', 'ctx', 'traj', 'ego']
+        args.sklt_format = 'pseudo_heatmap'
+        args.ctx_format = 'ori_local'
+        args.traj_format = 'ltrb'
+        args.ego_format = 'accel'
+        args.optim = 'adam'
+        args.scheduler_type1 = 'step'
+        args.lr_step_size = 20
+        args.lr_step_gamma = 0.1
     if 'R3D' in args.img_backbone_name or 'csn' in args.img_backbone_name\
         or 'R3D' in args.ctx_backbone_name or 'csn' in args.ctx_backbone_name:
         args.img_norm_mode = 'kinetics'

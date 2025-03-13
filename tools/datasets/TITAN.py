@@ -272,7 +272,8 @@ class TITAN_dataset(Dataset):
         self.offset_traj = offset_traj
         self.obs_len = obs_len
         self.pred_len = pred_len
-        self.seq_interval = self.fps // obs_fps - 1
+        self.obs_fps = obs_fps
+        self.seq_interval = self.fps // self.obs_fps - 1 if self.obs_fps > 0 else 0
         self.overlap_ratio = overlap_ratio
         self.recog_act = recog_act
         self.obs_or_pred = 'obs' if self.recog_act else 'pred'
@@ -418,9 +419,10 @@ class TITAN_dataset(Dataset):
         # num samples
         self.num_samples = len(self.samples['obs']['img_nm'])
 
-        # apply interval
-        if self.seq_interval > 0:
-            self.downsample_seq()
+        # # apply interval
+        
+        # if self.seq_interval > 0:
+        #     self.downsample_seq()
             
         # small set
         if small_set > 0:
@@ -540,6 +542,8 @@ class TITAN_dataset(Dataset):
                 cls_weights(self.num_samples_age, 'sklearn')
         
         # apply interval
+        self.dense_samples = {'obs':{}, 'pred':{}}
+        self.dense_samples['obs']['ego_motion'] = self.samples['obs']['ego_motion']
         if self.seq_interval > 0:
             self.downsample_seq()
             print('Applied interval')
@@ -580,6 +584,9 @@ class TITAN_dataset(Dataset):
         pred_bbox = copy.deepcopy(torch.tensor(self.samples['pred']['bbox'][idx]).float())
         obs_ego = torch.tensor(self.samples['obs']['ego_motion'][idx]).float()[:, 0:1]  # [accel, ang_vel] 0 for accel only
         assert len(obs_ego.shape) == 2
+        dense_obs_ego = torch.tensor(self.dense_samples['obs']['ego_motion'][idx]).float()[:, 0:1]
+        dense_obs_ego_speed = torch.zeros((self._obs_len*3, 1)).float()
+        assert dense_obs_ego.shape[0] == self._obs_len
         clip_id_int = torch.tensor(int(self.samples['obs']['clip_id'][idx][0]))  # str --> int
         ped_id_int = torch.tensor(int(float(self.samples['obs']['obj_id'][idx][0])))
         img_nm_int = torch.tensor(self.samples['obs']['img_nm_int'][idx])
@@ -627,6 +634,8 @@ class TITAN_dataset(Dataset):
                   'obs_bboxes_ori': obs_bbox_ori,
                   'obs_ego': obs_ego,
                   'obs_ego_speed': torch.zeros(obs_ego.shape).float(),
+                #   'dense_obs_ego': dense_obs_ego,
+                  'dense_obs_ego_speed': dense_obs_ego_speed,
                   'pred_act': target,
                   'pred_bboxes': pred_bbox_offset,
                   'pred_bboxes_ori': pred_bbox_ori,

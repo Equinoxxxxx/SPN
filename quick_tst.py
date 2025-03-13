@@ -91,6 +91,9 @@ class ToyDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.samples)
 
+def kmph2mpss(kmph):
+    pass
+    
 
 if __name__ == '__main__':
     seed_all(42)
@@ -126,9 +129,40 @@ if __name__ == '__main__':
     # Sample args1 and args2 creation
 
     from tools.visualize.visualize_1d_seq import vis_2_1d_seqs
-    acceleration = torch.rand(4, 1)
-    velocity = torch.rand(4, 1)
-    seqs = [acceleration, velocity]
-    tags = ['Acceleration (m/s²)', 'Velocity (m/s)']
-    lims = [(-1, 1), (-2, 2)]
-    img = vis_2_1d_seqs(seqs, tags, lims, 'test_output/vis1dseqs.png', weights=None, mode='below')
+    proto0_vel = [
+        [20.00414592,20.00414592,20.00414592,20.00414592,20.00414592,
+         20.00414592,20.00414592,19.006352640000003,18.00855936,18.00855936,
+         18.00855936,18.00855936,18.00855936,15.99687936,15.99687936,
+         15.99687936,15.99687936,15.99687936,15.99687936,15.99687936,
+         15.99687936,15.99687936,15.99687936,15.99687936,15.99687936,14.0012928,
+         14.0012928,14.0012928,12.00570624,12.00570624,12.00570624,
+         12.00570624,12.00570624,12.00570624,12.00570624,12.00570624,
+         12.00570624,10.01011968,10.01011968,10.01011968,10.01011968,
+         10.01011968,10.01011968,10.01011968,10.01011968,10.01011968,6.00285312,
+         6.00285312,6.00285312,6.00285312,6.00285312,6.00285312,
+         6.00285312,6.00285312,6.00285312,6.00285312,6.00285312,
+         6.00285312,5.00505984,4.007266560000001], # 4 3 5769-5828
+        [], # 4 1 3793-3852
+        [], # 4 1 3793-3852
+        [], # 4 12 6564-6623
+        [], # 4 12 6564-6623
+    ]
+    proto5_vel = [
+        [], # 4 10 13681-13740
+        [], # 4 4 414-473
+        [], # 2 2 14034-14093
+        [], # 1 2 4573-4632
+        [], # 4 7 6725-6784
+    ]
+
+    proto0_accel = [
+    ]
+    
+    # Example with 4:1 ratio
+    long_seq = np.random.randn(10)  # Length 100
+    short_seq = np.random.randn(5)  # Length 25
+    seqs = [long_seq, short_seq, ]
+    tags = ['High-res signal', 'Down-sampled signal']
+    lims = [(-3, 3), (-2, 2)]
+    img = vis_2_1d_seqs(seqs, tags, lims, 'test_output/output.png', weights=None, mode='below')
+    print(np.linspace(0, 10, 5))

@@ -1,5 +1,3 @@
-import torch
-
 import argparse
 import os
 import os.path as osp
@@ -22,6 +20,9 @@ from mmengine.utils import track_iter_progress
 
 from mmaction.registry import MODELS
 from mmaction.structures import ActionDataSample
+
+from config import cktp_root
+
 
 def turn_off_pretrained(cfg):
     # recursively find all pretrained in the model config,
@@ -47,7 +48,7 @@ def create_mm_backbones(backbone_name='poseC3D', pretrain=True):
     #     "'--cfg-options model.backbone.depth=18 model.backbone.with_cp=True'")
     if 'poseC3D' in backbone_name:
         # ckpt_path = '/home/y_feng/workspace6/work/ProtoPNet/work_dirs/models/slowonly_kinetics400_pretrained_r50_u48_120e_ucf101_split1_keypoint-cae8aa4a.pth'
-        ckpt_path = '/home/y_feng/workspace6/work/ProtoPNet/work_dirs/models/slowonly_kinetics400-pretrained-r50_8xb16-u48-120e_ucf101-split1-keypoint_20220815-9972260d.pth'
+        ckpt_path = os.path.join(cktp_root, 'slowonly_kinetics400-pretrained-r50_8xb16-u48-120e_ucf101-split1-keypoint_20220815-9972260d.pth')
         cfg_path = '/home/y_feng/workspace6/work/open-mmlab/mmaction2/configs/skeleton/posec3d/slowonly_kinetics400_pretrained_r50_u48_120e_ucf101_split1_keypoint.py'
         # ckpt_path = ''
         # cfg_path = ''
@@ -60,12 +61,11 @@ def create_mm_backbones(backbone_name='poseC3D', pretrain=True):
         return model.backbone
     
     elif backbone_name == 'ircsn152':
-        ckpt_path = '/home/y_feng/workspace6/work/ProtoPNet/work_dirs/models/ircsn_ig65m-pretrained-r152_8xb12-32x2x1-58e_kinetics400-rgb_20220811-c7a3cc5b.pth'
+        ckpt_path = os.path.join(cktp_root, 'ircsn_ig65m-pretrained-r152_8xb12-32x2x1-58e_kinetics400-rgb_20220811-c7a3cc5b.pth')
         cfg_path = '/home/y_feng/workspace6/work/mmaction2/mmaction2/configs/recognition/csn/ircsn_ig65m-pretrained-r152_8xb12-32x2x1-58e_kinetics400-rgb.py'
         model = init_recognizer(cfg_path, ckpt_path, device='cpu')
 
         return model.backbone
-
 
 
 if __name__ == '__main__':

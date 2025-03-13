@@ -79,7 +79,8 @@ class PIEDataset(Dataset):
         self.pred_len = pred_len
         self.overlap_ratio = overlap_ratio
         self.bbox_size = bbox_size
-        self.seq_interval = self.fps // obs_fps - 1
+        self.obs_fps = obs_fps
+        self.seq_interval = self.fps // self.obs_fps - 1 if self.obs_fps > 0 else 0
 
         # interval
         self._obs_len = self.obs_len * (self.seq_interval + 1)
@@ -243,6 +244,10 @@ class PIEDataset(Dataset):
             self.samples = self.rm_occluded(self.samples, max_occ)
 
         # apply interval
+        self.dense_samples = {}
+        self.dense_samples['obs_ego'] = self.samples['obs_ego']
+        if 'obs_ego_speed' in self.samples:
+            self.dense_samples['obs_ego_speed'] = self.samples['obs_ego_speed']
         if self.seq_interval > 0:
             self.downsample_seq()
             print('Applied interval')
@@ -328,6 +333,11 @@ class PIEDataset(Dataset):
         obs_ego = \
             torch.tensor(self.samples['obs_ego'][idx]).float().reshape(-1, 1)
         assert len(obs_ego.shape) == 2, obs_ego.shape
+        dense_obs_ego = torch.tensor(self.dense_samples['obs_ego'][idx]).float().reshape(-1, 1)
+        assert dense_obs_ego.shape[0] == self._obs_len
+        dense_obs_ego_speed = torch.zeros(dense_obs_ego.shape).float()
+        if 'obs_ego_speed' in self.samples:
+            dense_obs_ego_speed = torch.tensor(self.dense_samples['obs_ego_speed'][idx]).float().reshape(-1, 1)
         if self.dataset_name == 'PIE':
             obs_ego_speed = \
                 torch.tensor(self.samples['obs_ego_speed'][idx]).float().reshape(-1, 1)
@@ -356,6 +366,8 @@ class PIEDataset(Dataset):
                 'obs_bboxes_ori': obs_bbox_ori,
                 'obs_ego': obs_ego,  # shape: obs len, 1
                 'obs_ego_speed': obs_ego_speed,  # shape: obs len, 1
+                # 'dense_obs_ego': dense_obs_ego,
+                'dense_obs_ego_speed': dense_obs_ego_speed,
                 'pred_act': target,   # int
                 'pred_bboxes': pred_bbox_offset,   # shape: [pred_len, 4]
                 'pred_bboxes_unnormed': pred_bbox,

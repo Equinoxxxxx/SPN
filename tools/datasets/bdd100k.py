@@ -88,7 +88,8 @@ class BDD100kDataset(torch.utils.data.Dataset):
             self.subsets = 'val'
         self.obs_len = obs_len
         self.pred_len = pred_len
-        self.seq_interval = self.fps // obs_fps - 1
+        self.obs_fps = obs_fps
+        self.seq_interval = self.fps // self.obs_fps - 1 if self.obs_fps > 0 else 0
         self.overlap_ratio = overlap_ratio
         self.norm_traj = offset_traj
         self.target_color_order = target_color_order

@@ -29,6 +29,7 @@ from models.SGNet_CVAE import SGNet_CVAE
 from models.next import Next
 from models.deposit import Deposit, deposit_config
 from models.PedSpace import PedSpace
+from models.SLENN import MultiSLE, build_sle, img_setting, sk_setting, ctx_setting, traj_setting, ego_setting
 
 from tools.utils import makedir
 from tools.log import create_logger
@@ -271,6 +272,13 @@ def construct_model(args, device):
         model = PedSpace(args=args,
                          device=device,
                          )
+    elif args.model_name == 'SLENN':
+        model = build_sle(args, 
+                          img_setting,
+                          sk_setting,
+                          ctx_setting,
+                          traj_setting,
+                          ego_setting)
     return model
 
 
@@ -327,6 +335,14 @@ def construct_optimizer_scheduler(args, model, train_loaders):
         optimizer1 = torch.optim.Adam(model.parameters(), 
                                       lr=5e-5, 
                                       weight_decay=1e-3)
+    elif args.model_name == 'SLENN':
+        backbone_params, other_params = model.get_backbone_params()
+        opt_specs1 = [{'params': backbone_params, 'lr': args.backbone_lr1},
+                        {'params': other_params, 'lr':args.lr1}]
+        optimizer1 = torch.optim.Adam(opt_specs1, weight_decay=args.weight_decay, eps=1e-5)
+        lr_scheduler1 = torch.optim.lr_scheduler.StepLR(optimizer=optimizer1, 
+                                                        step_size=args.lr_step_size, 
+                                                        gamma=args.lr_step_gamma)
     else:
         backbone_params, other_params = model.get_backbone_params()
         opt_specs1 = [{'params': backbone_params, 'lr': args.backbone_lr1},
@@ -348,8 +364,8 @@ def construct_optimizer_scheduler(args, model, train_loaders):
         if args.epochs1 > 0:
             if args.scheduler_type1 == 'step':
                 lr_scheduler1 = torch.optim.lr_scheduler.StepLR(optimizer=optimizer1, 
-                                                                step_size=lr_step_size, 
-                                                                gamma=lr_step_gamma)
+                                                                step_size=args.lr_step_size, 
+                                                                gamma=args.lr_step_gamma)
             elif args.scheduler_type1 == 'cosine':
                 lr_scheduler1 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer1, 
                                                                             T_max=args.t_max, 

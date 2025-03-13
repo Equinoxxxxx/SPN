@@ -9,8 +9,9 @@ from thop import profile
 # from torchviz import make_dot
 from torchsummary import summary
 import os
-
 from copy import deepcopy
+
+from config import cktp_root
 from .R2D import resnet50, resnet18, resnet18_new
 from .R3D import generate_model
 from .I3D import I3D_backbone
@@ -1044,7 +1045,7 @@ def create_backbone(backbone_name,
     elif backbone_name == 'C3D_t4_clean':
         backbone = C3D_backbone(pretrained=False, t_downsample='t4')
     elif backbone_name == 'R3D18':  # 3, 16, 224, 224 -> 512, 1, 7, 7
-        pretrained_path = '../work_dirs/models/r3d18_KM_200ep.pth'
+        pretrained_path = os.path.join(cktp_root, 'r3d18_KM_200ep.pth')
         backbone = generate_model(18)
         pretrained = torch.load(pretrained_path, map_location='cpu')
         p_dict = pretrained['state_dict']  # keys必须完全一致
@@ -1059,7 +1060,7 @@ def create_backbone(backbone_name,
     # elif backbone_name == 'R3D34_new':
     #     backbone = _R3D.generate_model(34, t_downsample=False)
     elif backbone_name == 'R3D50':  # 3, 16, 224, 224 -> 2048 1 7 7
-        pretrained_path = '../work_dirs/models/r3d50_KMS_200ep.pth'
+        pretrained_path = os.path.join(cktp_root, 'r3d50_KMS_200ep.pth')
         backbone = generate_model(50)
         pretrained = torch.load(pretrained_path, map_location='cpu')
         p_dict = pretrained['state_dict']  # keys必须完全一致
@@ -1068,7 +1069,7 @@ def create_backbone(backbone_name,
                 p_dict.pop(name)
         backbone.load_state_dict(p_dict)
     elif backbone_name == 'R3D50_no_max':  # 3, 16, 224, 224 -> 2048 1 7 7
-        pretrained_path = '../work_dirs/models/r3d50_KMS_200ep.pth'
+        pretrained_path = os.path.join(cktp_root, 'r3d50_KMS_200ep.pth')
         backbone = generate_model(50, no_max_pool=True)
         pretrained = torch.load(pretrained_path, map_location='cpu')
         p_dict = pretrained['state_dict']  # keys必须完全一致
@@ -1079,7 +1080,7 @@ def create_backbone(backbone_name,
     elif backbone_name == 'R3D50_clean':
         backbone = generate_model(50, pretrained=False)
     elif backbone_name == 'R3D50_new':
-        pretrained_path = '../work_dirs/models/r3d50_KMS_200ep.pth'
+        pretrained_path = os.path.join(cktp_root, 'r3d50_KMS_200ep.pth')
         backbone = generate_model(50, t_downsample=False)
         pretrained = torch.load(pretrained_path, 
                                 map_location='cpu')
@@ -1090,7 +1091,7 @@ def create_backbone(backbone_name,
         backbone.load_state_dict(p_dict)
     elif backbone_name == 'I3D':
         backbone = I3D_backbone()
-        p_dict = torch.load('/home/y_feng/workspace6/work/ProtoPNet/work_dirs/models/i3d_model_rgb.pth')
+        p_dict = torch.load(os.path.join(cktp_root, 'i3d_model_rgb.pth'))
         p_dict.pop('conv3d_0c_1x1.conv3d.weight')
         p_dict.pop('conv3d_0c_1x1.conv3d.bias')
         backbone.load_state_dict(p_dict)

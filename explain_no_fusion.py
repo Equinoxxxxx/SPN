@@ -48,7 +48,7 @@ def forwad_pass_no_fusion(dataloader,
                 inputs['ctx'] = data['obs_context'].to(device)
             if 'ego' in modalities:
                 inputs['ego'] = data['obs_ego'].to(device)  # B T 1
-                inputs['ego_speed'] = data['obs_ego_speed'].to(device)  # B T 1
+                inputs['ego_speed'] = data['dense_obs_ego_speed'].to(device)  # B T 1
             if 'social' in modalities:
                 inputs['social'] = data['obs_neighbor_relation'].to(device)
                 inputs['obs_neighbor_bbox'] = data['obs_neighbor_bbox'].to(device)
@@ -401,7 +401,7 @@ def select_topk_no_fusion(args,
                     feat = copy.deepcopy(all_feat['ego'][idx_mod].detach().cpu().numpy())
                     ego_img = vis_1d_seq(ego, 
                                         lim, 
-                                        save_path=os.path.join(save_path, 
+                                        path=os.path.join(save_path, 
                                                                'ego.png'), 
                                         weights=None)
                     dataset_id = all_sample_ids['dataset_name'][idx_mod].int().detach().item()
@@ -415,7 +415,7 @@ def select_topk_no_fusion(args,
                         ego_img = vis_2_1d_seqs(seqs, 
                                                 tags, 
                                                 lims, 
-                                                save_path=os.path.join(save_path, 
+                                                path=os.path.join(save_path, 
                                                                     'accel_vel.png'), 
                                                 weights=None)
                 # cv2.imwrite(os.path.join(save_path, 'ego.png'), ego_img)

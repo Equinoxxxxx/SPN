@@ -91,6 +91,7 @@ def vis_1d_seq(seq, lim, path, weights=None, mode='below'):
 def vis_2_1d_seqs(seqs, tags, lims, path, weights=None, mode='below'):
     """
     Visualize up to 2 1D sequences in one figure with separate y-axes.
+    Handles sequences of different lengths where one is a down-sampled version of the other.
     
     Args:
         seqs: List of sequences to plot (max 2)
@@ -100,11 +101,33 @@ def vis_2_1d_seqs(seqs, tags, lims, path, weights=None, mode='below'):
         weights: Optional attention weights to visualize
         mode: How to display weights ('below' or 'background')
     """
+    fps = 2
     assert len(seqs) <= 2, "Maximum 2 sequences allowed"
     assert len(seqs) == len(tags) == len(lims), \
         f"Input lengths must match: {len(seqs)}, {len(tags)}, {len(lims)}"
+    # Set font sizes
+    SMALL_SIZE = 12
+    MEDIUM_SIZE = 14
+    BIGGER_SIZE = 16
+
+    plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
+    plt.rc('axes', titlesize=BIGGER_SIZE)    # fontsize of the axes title
+    plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
+    plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+    plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+    plt.rc('legend', fontsize=MEDIUM_SIZE)   # legend fontsize
+
+    # Find the longer and shorter sequences
+    seq_lengths = [len(seq) for seq in seqs]
+    min_len_idx = np.argmin(seq_lengths)
+    max_len_idx = 1 - min_len_idx  # Since we only have 2 sequences
     
-    colors = ['r', 'b']  # colors for the two possible curves
+    # Calculate the down-sampling ratio
+    ratio = seq_lengths[max_len_idx] // seq_lengths[min_len_idx]
+    assert seq_lengths[max_len_idx] % seq_lengths[min_len_idx] == 0, \
+        "Longer sequence length must be a multiple of shorter sequence length"
+    
+    colors = ['r', 'b']
     
     if weights is not None and mode == 'below':
         fig, (ax1, ax2) = plt.subplots(2, 1, gridspec_kw={'height_ratios': [6, 1]}, figsize=(10, 6))
@@ -115,23 +138,30 @@ def vis_2_1d_seqs(seqs, tags, lims, path, weights=None, mode='below'):
     if weights is not None and mode == 'background':
         colored_weights = apply_colormap(weights)
         colored_weights = colored_weights[:,:,::-1]  # BGR -> RGB
-        extent = [0, len(seqs[0]), lims[0][0], lims[0][1]]  # Use first sequence's limits
+        extent = [0, len(seqs[0]), lims[0][0], lims[0][1]]
         ax_main.imshow(colored_weights, aspect='auto', extent=extent, alpha=0.5)
     
     # Plot first sequence on the left y-axis
     ax_left = ax_main
-    ax_left.plot(seqs[0], color=colors[0], linewidth=2, label=tags[0])
-    ax_left.set_ylim(lims[0])
-    ax_left.set_ylabel(tags[0], color=colors[0])
-    ax_left.tick_params(axis='y', labelcolor=colors[0])
+    x_short = np.arange(seq_lengths[min_len_idx]) / fps
+    ax_left.plot(x_short, seqs[min_len_idx], color=colors[min_len_idx], linewidth=2, label=tags[min_len_idx],
+                     marker='o', markersize=4)
+    ax_left.set_ylim(lims[min_len_idx])
+    ax_left.set_ylabel(tags[min_len_idx], color=colors[min_len_idx])
+    ax_left.tick_params(axis='y', labelcolor=colors[min_len_idx])
     
     if len(seqs) == 2:
         # Plot second sequence on the right y-axis
         ax_right = ax_main.twinx()
-        ax_right.plot(seqs[1], color=colors[1], linewidth=2, label=tags[1])
-        ax_right.set_ylim(lims[1])
-        ax_right.set_ylabel(tags[1], color=colors[1])
-        ax_right.tick_params(axis='y', labelcolor=colors[1])
+        x_long = np.arange(seq_lengths[max_len_idx]) / fps / ratio
+        ax_right.plot(x_long, seqs[max_len_idx], color=colors[max_len_idx], linewidth=2, label=tags[max_len_idx])  # Add markers for down-sampled sequence
+        ax_right.set_ylim(lims[max_len_idx])
+        ax_right.set_ylabel(tags[max_len_idx], color=colors[max_len_idx])
+        ax_right.tick_params(axis='y', labelcolor=colors[max_len_idx])
+        
+        # # Add vertical lines to show down-sampling alignment
+        # for i in range(seq_lengths[min_len_idx]):
+        #     ax_main.axvline(x=i * ratio, color='gray', linestyle=':', alpha=0.3)
     
     ax_main.axhline(0, color='black', linewidth=.5)
     
@@ -142,6 +172,9 @@ def vis_2_1d_seqs(seqs, tags, lims, path, weights=None, mode='below'):
         lines = lines_left + lines_right
         labels = [l.get_label() for l in lines]
         ax_main.legend(lines, labels, loc='upper right')
+        
+        # Add down-sampling ratio information to x-label
+        ax_main.set_xlabel(f'Time steps (ratio={ratio}:1)')
     
     if weights is not None and mode == 'below':
         colored_weights = apply_colormap(weights)

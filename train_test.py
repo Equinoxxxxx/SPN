@@ -11,6 +11,7 @@ from tools.loss.cvae_loss import sgnet_cvae_loss, calc_stoch_mse
 from tools.loss.mono_sem_loss import calc_topk_monosem, calc_mono_sem_align_loss
 from tools.loss.diversity_loss import calc_diversity_loss
 from tools.loss.cluster_loss import calc_batch_simi_simple, calc_contrast_loss
+from tools.loss.orth_loss import calc_orth_loss_fix
 from tools.metrics import calc_acc, calc_auc, calc_confusion_matrix, calc_f1, \
     calc_mAP, calc_precision, calc_recall
 from models.SGNet import accumulate_traj, traj_to_sgnet_target
@@ -86,6 +87,7 @@ def train_test_epoch(args,
     total_batch_sparsity = 0
     total_cluster_loss = 0
     all_proto_simi = []
+    total_orth = 0
     # targets and logits for whole epoch
     targets_e = {}
     logits_e = {}
@@ -213,6 +215,26 @@ def train_test_epoch(args,
                                                    targets[k], 
                                                    weight=cls_weights_multi[k])
                         loss = loss + ce_dict[k] * loss_params['cls_eff']
+            elif model_name == 'SLENN':
+                output = model(inputs)
+                logits, multi_protos, feats = output
+                orth_loss = 0
+                if model.module.use_traj:
+                    protos = model.module.traj_model.proto_vec
+                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
+                if model.module.use_ego:
+                    protos = model.module.ego_model.proto_vec
+                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
+                if model.module.use_img:
+                    protos = model.module.img_model.proto_vec
+                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
+                if model.module.use_skeleton:
+                    protos = model.module.sk_model.proto_vec
+                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
+                if model.module.use_context:
+                    protos = model.module.ctx_model.proto_vec
+                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
+                total_orth += orth_loss.item()
             elif model_name == 'pedspace':
                 batch = (inputs, targets)
                 out = model(batch, is_train)

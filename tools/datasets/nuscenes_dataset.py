@@ -66,7 +66,8 @@ class NuscDataset(torch.utils.data.Dataset):
         self.fps = 2
         self.obs_len = obs_len
         self.pred_len = pred_len
-        self.seq_interval = self.fps // obs_fps - 1
+        self.obs_fps = obs_fps
+        self.seq_interval = self.fps // self.obs_fps - 1 if self.obs_fps > 0 else 0
         # sequence length considering interval
         self._obs_len = self.obs_len * (self.seq_interval + 1)
         self._pred_len = self.pred_len * (self.seq_interval + 1)
