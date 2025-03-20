@@ -41,8 +41,8 @@ def get_args():
     parser.add_argument('--lr2', type=float, default=0.001)
     parser.add_argument('--backbone_lr1', type=float, default=0.0001)
     parser.add_argument('--backbone_lr2', type=float, default=0.0001)
-    parser.add_argument('--scheduler_type1', type=str, default='onecycle')
-    parser.add_argument('--scheduler_type2', type=str, default='onecycle')
+    parser.add_argument('--scheduler_type1', type=str, default='cosine')
+    parser.add_argument('--scheduler_type2', type=str, default='cosine')
     parser.add_argument('--onecycle_div_f', type=int, default=10)
     parser.add_argument('--batch_schedule', type=int, default=0)
     parser.add_argument('--lr_step_size', type=int, default=5)
@@ -68,10 +68,10 @@ def get_args():
     parser.add_argument('--diversity_loss_func', type=str, default='triangular')
     parser.add_argument('--diversity_loss_eff', type=float, default=0)
     parser.add_argument('--mono_sem_eff', type=float, default=0.0)
-    parser.add_argument('--mono_sem_l1_eff', type=float, default=0.01)
+    parser.add_argument('--mono_sem_l1_eff', type=float, default=0.0001)
     parser.add_argument('--mono_sem_align_func', type=str, default='cosine_simi')
     parser.add_argument('--mono_sem_align_eff', type=float, default=0)
-    parser.add_argument('--cluster_loss_eff', type=float, default=0.001)
+    parser.add_argument('--cluster_loss_eff', type=float, default=0.01)
     parser.add_argument('--topk', type=int, default=5)
     parser.add_argument('--topk_metric', type=str, default='relative_var',
                         help='relative_var/activation')
@@ -83,13 +83,13 @@ def get_args():
     parser.add_argument('--simi_func', type=str, default='dot_prod')
     parser.add_argument('--bridge_m', type=str, default='sk')
     parser.add_argument('--n_proto', type=int, default=50)
-    parser.add_argument('--linear_proto_enc', type=int, default=1)
+    parser.add_argument('--linear_proto_enc', type=int, default=0)
     parser.add_argument('--proj_dim', type=int, default=512)
     parser.add_argument('--pool', type=str, default='max')
-    parser.add_argument('--n_proj_layer', type=int, default=1)
+    parser.add_argument('--n_proj_layer', type=int, default=2)
     parser.add_argument('--proj_bias', type=int, default=1)
     parser.add_argument('--proj_norm', type=str, default='ln')
-    parser.add_argument('--proj_actv', type=str, default='leakyrelu')
+    parser.add_argument('--proj_actv', type=str, default='relu')
     parser.add_argument('--mm_fusion_mode', type=str, default='no_fusion', 
                         help='avg/gaussian/no_fusion')
     parser.add_argument('--uncertainty', type=str, default='none')
@@ -212,6 +212,9 @@ def process_args(args):
         args.key_metric = 'pose_mse'
     elif args.model_name == 'SLENN':
         args.epochs2 = 0
+        args.cls_eff1 = 1
+        args.mse_eff1 = 0
+        args.pose_mse_eff1 = 0
         args.modalities = ['img', 'sklt', 'ctx', 'traj', 'ego']
         args.sklt_format = 'pseudo_heatmap'
         args.ctx_format = 'ori_local'

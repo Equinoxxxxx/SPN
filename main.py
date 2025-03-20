@@ -17,19 +17,9 @@ from torch.distributed import init_process_group, destroy_process_group
 from tools.distributed_parallel import ddp_setup
 torch.multiprocessing.set_sharing_strategy('file_system')
 
-from tools.datasets.PIE_JAAD import PIEDataset
-from tools.datasets.TITAN import TITAN_dataset
-from tools.datasets.nuscenes_dataset import NuscDataset
-from tools.datasets.bdd100k import BDD100kDataset
+from tools.datasets.construct_dataloader import construct_data_loader
 
-from models.PCPA import PCPA
-from models.ped_graph23 import PedGraph
-from models.SGNet import SGNet, parse_sgnet_args, parse_sgnet_args2
-from models.SGNet_CVAE import SGNet_CVAE
-from models.next import Next
-from models.deposit import Deposit, deposit_config
-from models.PedSpace import PedSpace
-from models.SLENN import MultiSLE, build_sle, img_setting, sk_setting, ctx_setting, traj_setting, ego_setting
+from models.construct_model import construct_model
 
 from tools.utils import makedir
 from tools.log import create_logger
@@ -59,227 +49,6 @@ def get_exp_num():
     with open(f_path, 'w') as f:
         f.write(str(exp_num))
     return exp_num
-
-
-def construct_data_loader(args, log=print):
-    datasets = [
-        {
-        'train':{k:None for k in args.dataset_names[0]},
-        'val':{k:None for k in args.test_dataset_names[0]},
-        'test':{k:None for k in args.test_dataset_names[0]},
-        },
-        {
-        'train':{k:None for k in args.dataset_names[1]},
-        'val':{k:None for k in args.test_dataset_names[1]},
-        'test':{k:None for k in args.test_dataset_names[1]},
-        },
-    ]
-    for stage in range(len(datasets)):
-        for subset in datasets[stage]:
-            _subset = subset
-            _overlap = args.overlap1 if stage == 0 else args.overlap2
-            _small_set = args.test_small_set
-            if subset == 'pre':
-                _subset = 'train'
-                _small_set = args.small_set
-            elif subset == 'train':
-                _small_set = args.small_set
-            for name in datasets[stage][subset]:
-                if name == 'TITAN':
-                    cur_set = TITAN_dataset(sub_set='default_'+_subset, 
-                                            offset_traj=False,
-                                            img_norm_mode=args.img_norm_mode, 
-                                            target_color_order=args.model_color_order,
-                                            obs_len=args.obs_len, 
-                                            pred_len=args.pred_len, 
-                                            overlap_ratio=_overlap, 
-                                            obs_fps=args.obs_fps,
-                                            recog_act=False,
-                                            multi_label_cross=False, 
-                                            act_sets=args.act_sets,
-                                            loss_weight='sklearn',
-                                            small_set=_small_set,
-                                            resize_mode=args.resize_mode, 
-                                            modalities=args.modalities,
-                                            img_format=args.img_format,
-                                            sklt_format=args.sklt_format,
-                                            ctx_format=args.ctx_format,
-                                            traj_format=args.traj_format,
-                                            ego_format=args.ego_format,
-                                            social_format=args.social_format,
-                                            augment_mode=args.augment_mode,
-                                            max_n_neighbor=args.max_n_neighbor,
-                                            )
-                if name in ('PIE', 'JAAD'):
-                    cur_set = PIEDataset(dataset_name=name, 
-                                         seq_type='crossing',
-                                        subset=_subset,
-                                        obs_len=args.obs_len, 
-                                        pred_len=args.pred_len, 
-                                        overlap_ratio=_overlap, 
-                                        obs_fps=args.obs_fps,
-                                        do_balance=False, 
-                                        bbox_size=(224, 224), 
-                                        img_norm_mode=args.img_norm_mode, 
-                                        target_color_order=args.model_color_order,
-                                        resize_mode=args.resize_mode,
-                                        modalities=args.modalities,
-                                        img_format=args.img_format,
-                                        sklt_format=args.sklt_format,
-                                        ctx_format=args.ctx_format,
-                                        traj_format=args.traj_format,
-                                        ego_format=args.ego_format,
-                                        social_format=args.social_format,
-                                        small_set=_small_set,
-                                        tte=args.tte,
-                                        recog_act=False,
-                                        offset_traj=False,
-                                        augment_mode=args.augment_mode,
-                                            max_n_neighbor=args.max_n_neighbor,)
-                    if subset in ('test', 'val'):
-                        cur_set.tte = args.test_tte
-                if name == 'nuscenes':
-                    cur_set = NuscDataset(subset=_subset,
-                                        obs_len=args.obs_len, 
-                                        pred_len=args.pred_len, 
-                                        overlap_ratio=_overlap, 
-                                        obs_fps=args.obs_fps,
-                                        small_set=_small_set,
-                                        augment_mode=args.augment_mode,
-                                        resize_mode=args.resize_mode,
-                                        target_color_order=args.model_color_order, 
-                                        img_norm_mode=args.img_norm_mode,
-                                        modalities=args.modalities,
-                                        img_format=args.img_format,
-                                        sklt_format=args.sklt_format,
-                                        ctx_format=args.ctx_format,
-                                        traj_format=args.traj_format,
-                                        ego_format=args.ego_format,
-                                        social_format=args.social_format,
-                                            max_n_neighbor=args.max_n_neighbor,
-                                        )
-                if name == 'bdd100k':
-                    cur_set = BDD100kDataset(subsets=_subset,
-                                            obs_len=args.obs_len, 
-                                            pred_len=args.pred_len, 
-                                            overlap_ratio=_overlap, 
-                                            obs_fps=args.obs_fps,
-                                            target_color_order=args.model_color_order, 
-                                            img_norm_mode=args.img_norm_mode,
-                                            small_set=_small_set,
-                                            resize_mode=args.resize_mode,
-                                            modalities=args.modalities,
-                                            img_format=args.img_format,
-                                            sklt_format=args.sklt_format,
-                                            ctx_format=args.ctx_format,
-                                            traj_format=args.traj_format,
-                                            ego_format=args.ego_format,
-                                            social_format=args.social_format,
-                                            augment_mode=args.augment_mode,
-                                            max_n_neighbor=args.max_n_neighbor,
-                                            )
-                datasets[stage][subset][name] = cur_set    
-    for stage in range(len(datasets)):
-        for _sub in datasets[stage]:
-            for nm in datasets[stage][_sub]:
-                if datasets[stage][_sub][nm] is not None:
-                    log(f'{_sub} {nm} {len(datasets[stage][_sub][nm])}')
-    
-    concat_train_sets = []
-    val_sets = []
-    test_sets = []
-    train_loaders = []
-    val_loaders = []
-    test_loaders = []
-    for stage in range(len(datasets)):
-        concat_train_sets.append(
-            torch.utils.data.ConcatDataset(
-                [datasets[stage]['train'][k] for k in datasets[stage]['train']]
-            )
-        )
-        val_sets.append([datasets[stage]['val'][k] for k in datasets[stage]['val']])
-        test_sets.append([datasets[stage]['test'][k] for k in datasets[stage]['test']])
-        _batch_size = args.batch_size[stage]
-        train_loaders.append(
-            torch.utils.data.DataLoader(concat_train_sets[stage],
-                                        batch_size=_batch_size, 
-                                        shuffle=args.shuffle,
-                                        num_workers=args.dataloader_workers,
-                                        pin_memory=True,
-                                        drop_last=True)
-        )
-        val_loaders.append(
-            [torch.utils.data.DataLoader(val_sets[stage][i], 
-                                        batch_size=_batch_size, 
-                                        shuffle=args.shuffle,
-                                        num_workers=args.dataloader_workers,
-                                        pin_memory=True,
-                                        drop_last=True
-                                        ) for i in range(len(val_sets[stage]))]
-        )
-        test_loaders.append(
-            [torch.utils.data.DataLoader(test_sets[stage][i], 
-                                        batch_size=_batch_size, 
-                                        shuffle=args.shuffle,
-                                        num_workers=args.dataloader_workers,
-                                        pin_memory=True,
-                                        drop_last=True
-                                        ) for i in range(len(test_sets[stage]))]
-        )
-    return train_loaders, val_loaders, test_loaders
-
-
-def construct_model(args, device):
-    if args.model_name == 'PCPA':
-        model = PCPA(modalities=args.modalities,
-                     ctx_bb_nm=args.ctx_backbone_name,
-                     proj_norm=args.proj_norm,
-                     proj_actv=args.proj_actv,
-                     pretrain=False,
-                     act_sets=args.act_sets,
-                     proj_dim=args.proj_dim,
-                     )
-    elif args.model_name == 'ped_graph':
-        model = PedGraph(modalities=args.modalities,
-                         proj_norm=args.proj_norm,
-                         proj_actv=args.proj_actv,
-                         pretrain=False,
-                         act_sets=args.act_sets,
-                         n_mlp=1,
-                         proj_dim=args.proj_dim,
-                         )
-    elif args.model_name == 'sgnet':
-        sgnet_args = parse_sgnet_args2()
-        sgnet_args.enc_steps = args.obs_len
-        sgnet_args.dec_steps = args.pred_len
-        model = SGNet(sgnet_args)
-    elif args.model_name == 'sgnet_cvae':
-        sgnet_args = parse_sgnet_args2()
-        sgnet_args.enc_steps = args.obs_len
-        sgnet_args.dec_steps = args.pred_len
-        model = SGNet_CVAE(sgnet_args)
-    elif args.model_name == 'next':
-        model = Next(obs_len=args.obs_len,
-                     pred_len=args.pred_len,
-                     action_sets=args.act_sets,
-                     )
-    elif args.model_name == 'deposit':
-        model = Deposit(deposit_config, 
-                        device, 
-                        target_dim=17*2,
-                        modality='sklt')
-    elif args.model_name == 'pedspace':
-        model = PedSpace(args=args,
-                         device=device,
-                         )
-    elif args.model_name == 'SLENN':
-        model = build_sle(args, 
-                          img_setting,
-                          sk_setting,
-                          ctx_setting,
-                          traj_setting,
-                          ego_setting)
-    return model
 
 
 def construct_optimizer_scheduler(args, model, train_loaders):
@@ -715,6 +484,7 @@ def main(rank, world_size, args):
                     update_best_res(best_val_res, best_test_res, curve_dict, args.test_dataset_names[0])
                     best_e = e
             elif args.key_metric in ('f1', 'acc', 'auc', 'map') and args.cls_eff[0] > 0:
+                # import pdb; pdb.set_trace()
                 cur_key_res = sum([curve_dict[d]['val']['cls'][args.key_act_set][args.key_metric][-1] for d in args.test_dataset_names[0]]) \
                 / len(args.test_dataset_names[0])
                 log(f'cur_key_res: {args.key_metric} {cur_key_res}\n prev best: {best_val_res["cls"][args.key_act_set][args.key_metric]}')
@@ -735,8 +505,9 @@ def main(rank, world_size, args):
                 log(f'train sparsity best epoch: {best_epoch_train_res[0]["all_sparsity"]}')
             log(f'all results of best epoch: {best_epoch_all_test_res[0]}')
             # update best sparsity
-            val_sparsity = sum([curve_dict[d]['val']['all_sparsity'][-1] for d in args.test_dataset_names[0]]) \
-                / len(args.test_dataset_names[0])
+            if args.model_name == 'pedspace':
+                val_sparsity = sum([curve_dict[d]['val']['all_sparsity'][-1] for d in args.test_dataset_names[0]]) \
+                    / len(args.test_dataset_names[0])
             if args.model_name == 'pedspace' and train_res['all_sparsity'] > best_train_sparsity:
                 best_train_sparsity = train_res['all_sparsity']
                 best_train_sparse_e = e

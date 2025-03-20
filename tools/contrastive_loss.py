@@ -187,6 +187,30 @@ def gather_features(
     return all_image_features, all_text_features
 
 
+def dimension_wise_contrast(batch_feats, mode='barlow_twins', lambda_contrast=0.01):
+    '''
+    batch_feats: torch.tensor (B, D)
+    '''
+    ori_device = batch_feats.device
+    eps = 1e-5
+    assert len(batch_feats.size()) == 2, batch_feats.size()
+    if mode == 'minus_I':
+        batch_feats = batch_feats / (batch_feats.norm(dim=0, keepdim=True)+eps)
+        simi_mat = batch_feats.t() @ batch_feats + eps  # D, D
+        _mask = torch.eye(batch_feats.size(1))
+        loss = torch.norm(simi_mat - _mask)
+    elif mode == 'barlow_twins':
+        b, d = batch_feats.size()
+        simi_mat = batch_feats.t() @ batch_feats + eps  # D, D
+        simi_mat.div_(b)
+        diag = torch.diagonal(simi_mat).add_(-1).pow_(2).sum()
+        off_diag = simi_mat.flatten()[:-1].view(d-1, d+1)[:, 1:].flatten()
+        off_diag = off_diag.pow_(2).sum()
+        loss = diag + lambda_contrast*off_diag
+    else:
+        raise ValueError(mode)
+    return loss, simi_mat
+
 class ClipLoss(nn.Module):
 
     def __init__(

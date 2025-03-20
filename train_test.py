@@ -11,7 +11,8 @@ from tools.loss.cvae_loss import sgnet_cvae_loss, calc_stoch_mse
 from tools.loss.mono_sem_loss import calc_topk_monosem, calc_mono_sem_align_loss
 from tools.loss.diversity_loss import calc_diversity_loss
 from tools.loss.cluster_loss import calc_batch_simi_simple, calc_contrast_loss
-from tools.loss.orth_loss import calc_orth_loss_fix
+from tools.loss.orth_loss import calc_orth_loss_fix, calc_orth_loss
+from tools.contrastive_loss import dimension_wise_contrast
 from tools.metrics import calc_acc, calc_auc, calc_confusion_matrix, calc_f1, \
     calc_mAP, calc_precision, calc_recall
 from models.SGNet import accumulate_traj, traj_to_sgnet_target
@@ -88,6 +89,7 @@ def train_test_epoch(args,
     total_cluster_loss = 0
     all_proto_simi = []
     total_orth = 0
+    total_contrast = 0
     # targets and logits for whole epoch
     targets_e = {}
     logits_e = {}
@@ -216,25 +218,42 @@ def train_test_epoch(args,
                                                    weight=cls_weights_multi[k])
                         loss = loss + ce_dict[k] * loss_params['cls_eff']
             elif model_name == 'SLENN':
+                loss = 0
                 output = model(inputs)
                 logits, multi_protos, feats = output
+                # calc orth loss
                 orth_loss = 0
-                if model.module.use_traj:
-                    protos = model.module.traj_model.proto_vec
-                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
-                if model.module.use_ego:
-                    protos = model.module.ego_model.proto_vec
-                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
-                if model.module.use_img:
-                    protos = model.module.img_model.proto_vec
-                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
-                if model.module.use_skeleton:
-                    protos = model.module.sk_model.proto_vec
-                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
-                if model.module.use_context:
-                    protos = model.module.ctx_model.proto_vec
-                    orth_loss += calc_orth_loss_fix(protos, orth_type=3)
+                for k in modalities:
+                    protos = multi_protos[k]  # B n_p C
+                    orth_loss += calc_orth_loss(protos, orth_type=3)
+                loss = loss + orth_loss * 0.05
                 total_orth += orth_loss.item()
+                # calc contrastive loss
+                d_contrast_loss = 0
+                for k in feats:
+                    _d_contrast_loss, simi_mat  = \
+                        dimension_wise_contrast(feats[k])
+                    d_contrast_loss = d_contrast_loss + _d_contrast_loss
+                    # simi_mat_statis[k]['max'].append(torch.max(simi_mat.detach()).cpu().item())
+                    # simi_mat_statis[k]['min'].append(torch.min(simi_mat.detach()).cpu().item())
+                loss = loss + d_contrast_loss * 0.05
+                total_contrast += d_contrast_loss.item()
+                # calc ce loss
+                ce_dict = {}
+                for k in logits:
+                    ce_dict[k] = F.cross_entropy(logits[k], targets[k], weight=cls_weights_multi[k])
+                    loss = loss + ce_dict[k]
+                # calc classification metrics
+                for k in logits:
+                    if n_iter == 0:
+                        targets_e[k] = targets[k].detach()
+                        logits_e[k] = logits[k].detach()
+                    else:
+                        try:
+                            targets_e[k] = torch.cat((targets_e[k], targets[k].detach()), dim=0)
+                        except:
+                            import pdb; pdb.set_trace()
+                        logits_e[k] = torch.cat((logits_e[k], logits[k].detach()), dim=0)
             elif model_name == 'pedspace':
                 batch = (inputs, targets)
                 out = model(batch, is_train)
