@@ -110,6 +110,12 @@ class PedSpace(nn.Module):
                 raise ValueError(self.pose_dec_name)
     
     def forward(self, batch, is_train=1, mask=None):
+        '''
+        batch: (inputs, targets)
+        inputs: {m: B T ...}
+        targets: {act_set: B ...}
+        mask: 1 n_proto
+        '''
         # import pdb; pdb.set_trace()
         inputs, targets = batch
         feat = {}
@@ -146,6 +152,7 @@ class PedSpace(nn.Module):
         if not self.linear_proto_enc:
             proto_simi = self.proto_enc_actv(proto_simi)
         if mask is not None:
+            # import pdb; pdb.set_trace()
             proto_simi = proto_simi * mask
         # mm proto_simi
         mm_proto_simi = None

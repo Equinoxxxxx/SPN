@@ -1,6 +1,7 @@
 import os
+
 def create_logger(log_filename, display=True):
-    f = open(log_filename, 'a')
+    f = open(log_filename, 'w')
     counter = [0]
     # this function will still have access to f after create_logger terminates
     def logger(text):

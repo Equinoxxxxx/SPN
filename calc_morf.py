@@ -24,9 +24,11 @@ from customize_proto import customize_proto
 def calc_morf():
     parser = argparse.ArgumentParser(description='explain args')
     parser.add_argument('--args_path', type=str, 
-        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp726/args.pkl')
+        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp726/args.pkl'
+        )
     parser.add_argument('--ckpt_path', type=str, 
-        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp726/ckpt/22_0.0000.pth')
+        default='/home/y_feng/workspace6/work/PedSpace/exp_dir/pedspace_sklt_ctx_traj_ego_social/exp726/ckpt/22_0.0000.pth'
+        )
     # parser.add_argument('--dataset_name', type=str, default='TITAN')
     morf_args = parser.parse_args([])
 
@@ -41,7 +43,9 @@ def calc_morf():
     args_dict.update(extra_args)
     args = argparse.Namespace(**args_dict)
     args.test_customized_proto = True
-    args.batch_size = [1,1]
+    # args.batch_size = [1,1]
+    batch_size = 32
+    args.batch_size = [batch_size, batch_size]
     if not hasattr(args, 'max_n_neighbor'):
         args.max_n_neighbor = 10
     # log
@@ -66,7 +70,7 @@ def calc_morf():
     model_parallel.eval()
     morf_dict = {}
     for act_set in args.act_sets:
-        relevs = model.module.proto_dec[act_set].weight.detach()  # n_cls, n_proto
+        relevs = model_parallel.module.proto_dec[act_set].weight.detach()  # n_cls, n_proto
         ori_weights = copy.deepcopy(relevs)
         if act_set == 'cross':
             _relevs = torch.zeros_like(relevs)
@@ -88,13 +92,15 @@ def calc_morf():
                 morf_masks = get_batch_morf_masks(relev_c).to(device)  # 1, nf+1, nf
                 # nf iter
                 for f in tqdm(range(nf+1), desc='nf iter'):
-                    mask = morf_masks[0, f]  # 1 nf
+                    mask = morf_masks[0:1, f]  # 1 nf
                     # masked = ori_weights * mask  #  n_cls n_feat
-                    for i_iter, data in enumerate(loader):
+                    for i_iter, data in tqdm(enumerate(loader), desc='sampleiter'):
                         # load inputs
+                        start_idx = i_iter * batch_size
+                        end_idx = min(start_idx + batch_size, loader.dataset.num_samples)
                         inputs = {}
                         if 'img' in args.modalities:
-                            inputs['img'] = data['ped_imgs'].to(device)  # B 3 T H W
+                            inputs['img'] = data['ped_imgs'][start_idx:end_idx].to(device)  # B 3 T H W
                         if 'sklt' in args.modalities:
                             inputs['sklt'] = data['obs_skeletons'].to(device)  # B 2 T nj
                         if 'ctx' in args.modalities:
@@ -118,14 +124,15 @@ def calc_morf():
                         targets['pred_traj'] = data['pred_bboxes'].to(device)  # B predlen 4
                         if 'sklt' in args.modalities:
                             targets['pred_sklt'] = data['pred_skeletons'].to(device)  # B ndim predlen nj
-
                         # forward
                         with torch.no_grad():
                             batch = (inputs, targets)
-                            out = model(batch, is_train=0, mask=mask)
-                            logit = out['cls_logits'][act_set].detach() # 1 n_cls
+                            # import pdb; pdb.set_trace()
+                            out = model_parallel(batch, is_train=0, mask=mask)
+                            # log(f'class {c} feature {f} iter {i_iter} forward done')
+                            logit = out['cls_logits'][act_set].detach() # batch_size n_cls
                             logit = F.softmax(logit, dim=-1)
-                            morf_logits[c, i_iter, f] = logit[0, c]
+                            morf_logits[c, start_idx:end_idx, f] = logit[:, c]
             morf_logits = morf_logits.mean(1)  # c, nf
             morf_logits_path = os.path.join(morf_root, f'morf_logits_{act_set}_{dataset_name}.pkl')
             with open(morf_logits_path, 'wb') as f:
@@ -143,7 +150,7 @@ def calc_morf():
                 # auc_morf_norm[c] = (auc_morf[c] - torch.min(morf_logits[c])) / (torch.max(morf_logits[c]) - torch.min(morf_logits[c]))
             log(f'{act_set} {dataset_name} auc-morf: {auc_morf} \tauc-morf max norm: {auc_morf_max_norm}')
             log(f'Res saved in {morf_root}')
-            logclose()
+    logclose()
 
 def get_one_feat_masks(n_feat):
     '''
@@ -168,7 +175,7 @@ def get_batch_morf_masks(relevs):
     # tril_idcs = torch.tril(nn_idcs, diagonal=0)  # b, n_feat, n_feat
     # tril_idcs += torch.triu(-1*torch.ones(size=(n_feat, n_feat)), diagonal=1)  # lower triangle with rest part -1
 
-    masks = torch.ones(size=(b_size, n_feat+1, n_feat))
+    masks = torch.ones(size=(b_size, n_feat+1, n_feat)).to(relevs.device)
     for i in range(b_size):
         for j in range(n_feat):
             masks[i, j+1, idcs[i, :j+1]] = 0
@@ -203,3 +210,7 @@ def calc_auc_morf(logits):
             res += (logits[i] + logits[i+1]) / 2
         res = res / n
     return res.detach().cpu()
+
+
+if __name__ == '__main__':
+    calc_morf()

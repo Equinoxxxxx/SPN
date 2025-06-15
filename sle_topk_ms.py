@@ -26,6 +26,7 @@ from tools.metrics import *
 from tools.visualize.plot import draw_morf
 
 from tools.datasets.construct_dataloader import construct_data_loader
+from models.construct_model import construct_model
 
 def test():
     parser = argparse.ArgumentParser()
@@ -76,14 +77,16 @@ def test():
 
     # construct the model
     log('----------------------------Construct model-----------------------------')
-    model = torch.load(ckpt_path)
-    model = model.to(device)
+    model = construct_model(args, device)
+    model = model.float().to(device)
+    state_dict = torch.load(ckpt_path, map_location=device)
+    model.load_state_dict(state_dict)
     model_parallel = torch.nn.DataParallel(model)
     model_parallel.eval()
 
     # train set
     # n_sample, n_concept
-    all_simis = forward_pass(model, 
+    all_simis = forward_pass(model_parallel, 
                              train_loaders[0], 
                              model_name=args.model_name, 
                              device=device, 
@@ -109,7 +112,7 @@ def test():
     for test_loader in test_loaders[0]:
         cur_dataset = test_loader.dataset.dataset_name
         log(cur_dataset)
-        all_simis = forward_pass(model, 
+        all_simis = forward_pass(model_parallel, 
                                  test_loader, 
                                  model_name=args.model_name, 
                                  device=device, 
@@ -166,19 +169,18 @@ def forward_pass(model,
 
         # load gt
         targets = {}
-        targets['final'] = data['pred_intent'].to(device).view(-1) # idx, not one hot
-        if dataloader.dataset.dataset_name == 'TITAN':
-            targets['atomic'] = data['atomic_actions'].to(device).view(-1)
-            targets['complex'] = data['complex_context'].to(device).view(-1)
-            targets['communicative'] = data['communicative'].to(device).view(-1)
-            targets['transporting'] = data['transporting'].to(device).view(-1)
-            targets['age'] = data['age'].to(device).view(-1)
+        targets['cross'] = data['pred_act'].to(device).view(-1) # idx, not one hot
+        targets['atomic'] = data['atomic_actions'].to(device).view(-1)
+        targets['complex'] = data['complex_context'].to(device).view(-1)
+        targets['communicative'] = data['communicative'].to(device).view(-1)
+        targets['transporting'] = data['transporting'].to(device).view(-1)
+        targets['age'] = data['age'].to(device).view(-1)
 
         # forward
         b_start = time.time()
         # torch.enable_grad() has no effect outside of no_grad()
         with torch.no_grad():
-            if model_name == 'SLE':
+            if model_name == 'SLENN':
                 mm_simis = []
                 if 'traj' in modalities:
                     traj_simi, _, _, traj_protos = \
